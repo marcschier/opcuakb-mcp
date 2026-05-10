@@ -1,0 +1,21 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>OpcUaKb.Agent</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Microsoft 365 Agents SDK (Bot Framework hosting + JWT validation + activity routing) -->
+    <PackageReference Include="Microsoft.Agents.Hosting.AspNetCore" Version="1.2.*" />
+    <PackageReference Include="Microsoft.Agents.Authentication.Msal" Version="1.2.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Reuse KB retrieve + GPT-4o synthesis from Core -->
+    <ProjectReference Include="..\OpcUaKb.Core\OpcUaKb.Core.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -34,6 +34,39 @@ SEARCH_API_KEY=<your-search-api-key> ./scripts/install-mcp.sh hosted
 SEARCH_API_KEY=<your-search-api-key> ./scripts/install-mcp.sh local
 ```
 
+## Agent Deployment Scripts
+
+### `install-agent.ps1` (PowerShell) / `install-agent.sh` (Bash)
+
+End-to-end automation for deploying the OPC UA Custom Engine Agent (Microsoft 365 Agents SDK / Bot Framework) to Azure and Microsoft 365.
+
+```powershell
+.\scripts\install-agent.ps1 [-ResourceGroup rg-opcua-kb] [-Prefix opcua-kb] [-Location eastus] [-SkipImageBuild]
+```
+
+```bash
+./scripts/install-agent.sh [-g rg-opcua-kb] [-p opcua-kb] [-l eastus] [--skip-image-build]
+```
+
+**What it does (idempotent — safe to re-run):**
+
+1. Creates or finds Microsoft Entra ID multi-tenant app registration (`OPC UA KB Agent`) with the correct redirect URI (`https://token.botframework.com/.auth/web/redirect`)
+2. Generates a 2-year client secret (appended — doesn't invalidate prior secrets in flight)
+3. Sets the `identifierUris` to `api://botid-{appId}` (required by Teams manifest)
+4. Builds the agent Docker image via ACR (`Dockerfile.agent`)
+5. Deploys the Bicep template with `botAppId` and `botAppPassword` parameters
+6. Updates the Container App revision to pick up the new image
+7. Sets the Bot Service messaging endpoint to the agent's FQDN
+8. Generates the Teams app package (substitutes `${{BOT_ID}}` and `${{TEAMS_APP_ID}}`, copies icons, zips)
+
+**Output:** `agents/m365-agent/appPackage/build/opcua-kb-agent.zip` ready to upload via Teams Admin Center.
+
+**Prerequisites:**
+- `az` CLI (logged in)
+- An existing `rg-opcua-kb` resource group (the script doesn't create infrastructure from scratch — run `infra/deploy.sh` first to create the base resources, then `install-agent.ps1` to add the agent)
+
+**Note:** The script uses **Python-direct invocation** of the Azure CLI on Windows to avoid `cmd.exe` truncating client secrets containing special characters like `&`.
+
 ## Manual Configuration
 
 ### GitHub Copilot CLI

@@ -28,6 +28,13 @@ param cloudLibUsername string = ''
 @secure()
 param cloudLibPassword string = ''
 
+@description('Optional: Entra app appId for the Bot Framework agent (set by install-agent.ps1)')
+param botAppId string = ''
+
+@description('Optional: Entra app client secret for the Bot Framework agent')
+@secure()
+param botAppPassword string = ''
+
 // ── Derived names ────────────────────────────────────────────────────
 var searchName = '${prefix}-search'
 var foundryName = '${prefix}-foundry'
@@ -413,7 +420,158 @@ resource mcpServerFoundryRoleAssignment 'Microsoft.Authorization/roleAssignments
   }
 }
 
-// ── 10. Azure Monitor Workbook ───────────────────────────────────────
+// ── 10. Custom Engine Agent (Bot Framework) ─────────────────────────
+var agentAppName = '${prefix}-agent'
+var agentImage = empty(pipelineImage) ? 'mcr.microsoft.com/dotnet/aspnet:10.0' : '${acr.properties.loginServer}/opcua-kb-agent:latest'
+
+resource agent 'Microsoft.App/containerApps@2024-03-01' = {
+  name: agentAppName
+  location: location
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {
+    environmentId: containerEnv.id
+    configuration: {
+      activeRevisionsMode: 'Single'
+      ingress: {
+        external: true
+        targetPort: 8080
+        transport: 'http'
+        allowInsecure: false
+      }
+      registries: [
+        {
+          server: acr.properties.loginServer
+          username: acr.listCredentials().username
+          passwordSecretRef: 'acr-password'
+        }
+      ]
+      secrets: concat([
+        {
+          name: 'acr-password'
+          value: acr.listCredentials().passwords[0].value
+        }
+        {
+          name: 'search-api-key'
+          value: search.listAdminKeys().primaryKey
+        }
+      ], empty(botAppPassword) ? [] : [
+        {
+          name: 'bot-password'
+          value: botAppPassword
+        }
+      ])
+    }
+    template: {
+      containers: [
+        {
+          name: 'agent'
+          image: agentImage
+          resources: {
+            cpu: json('0.5')
+            memory: '1Gi'
+          }
+          env: concat([
+            {
+              name: 'SEARCH_ENDPOINT'
+              value: 'https://${search.name}.search.windows.net'
+            }
+            {
+              name: 'SEARCH_API_KEY'
+              secretRef: 'search-api-key'
+            }
+            {
+              name: 'AOAI_ENDPOINT'
+              value: foundry.properties.endpoint
+            }
+          ], empty(botAppId) ? [] : [
+            {
+              name: 'BOT_ID'
+              value: botAppId
+            }
+            {
+              name: 'BOT_PASSWORD'
+              secretRef: 'bot-password'
+            }
+          ])
+        }
+      ]
+      scale: {
+        minReplicas: 1
+        maxReplicas: 3
+        rules: [
+          {
+            name: 'http-rule'
+            http: {
+              metadata: {
+                concurrentRequests: '10'
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
+
+resource agentFoundryRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(agent.id, foundry.id, cognitiveServicesOpenAIUserRole)
+  scope: foundry
+  properties: {
+    principalId: agent.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: cognitiveServicesOpenAIUserRole
+  }
+}
+
+resource bot 'Microsoft.BotService/botServices@2022-09-15' = if (!empty(botAppId)) {
+  name: agentAppName
+  location: 'global'
+  kind: 'azurebot'
+  sku: {
+    name: 'F0'
+  }
+  properties: {
+    displayName: 'OPC UA Expert'
+    description: 'OPC UA Knowledge Base Agent for Microsoft 365 Copilot and Teams'
+    iconUrl: 'https://docs.botframework.com/static/devportal/client/images/bot-framework-default.png'
+    msaAppType: 'MultiTenant'
+    msaAppId: botAppId
+    endpoint: 'https://${agent.properties.configuration.ingress.fqdn}/api/messages'
+    developerAppInsightKey: ''
+    developerAppInsightsApplicationId: ''
+    publicNetworkAccess: 'Enabled'
+    isStreamingSupported: false
+  }
+}
+
+resource botTeamsChannel 'Microsoft.BotService/botServices/channels@2022-09-15' = if (!empty(botAppId)) {
+  parent: bot
+  name: 'MsTeamsChannel'
+  location: 'global'
+  properties: {
+    channelName: 'MsTeamsChannel'
+    properties: {
+      enableCalling: false
+      isEnabled: true
+    }
+  }
+}
+
+resource botM365Channel 'Microsoft.BotService/botServices/channels@2022-09-15' = if (!empty(botAppId)) {
+  parent: bot
+  name: 'M365Extensions'
+  location: 'global'
+  properties: {
+    channelName: 'M365Extensions'
+    properties: {
+      isEnabled: true
+    }
+  }
+}
+
+// ── 11. Azure Monitor Workbook ───────────────────────────────────────
 var workbookContent = '''
 {"version":"Notebook/1.0","items":[{"type":1,"content":{"json":"# OPC UA Knowledge Base Pipeline Dashboard\n\nMonitors crawl + index pipeline for reference.opcfoundation.org"},"name":"header"},{"type":3,"content":{"version":"KqlItem/1.0","query":"ContainerAppConsoleLogs_CL\n| where ContainerGroupName_s startswith \"opcua-pipeline-job\"\n| where Log_s has \"[PIPELINE]\"\n| parse Log_s with * \"Phase=\" Phase:string \" Status=\" Status:string \" \" *\n| project TimeGenerated, Phase, Status\n| order by TimeGenerated desc\n| take 20","size":1,"title":"Recent Pipeline Events","timeContext":{"durationMs":604800000},"queryType":0,"resourceType":"microsoft.operationalinsights/workspaces"},"name":"pipeline-events"},{"type":3,"content":{"version":"KqlItem/1.0","query":"ContainerAppConsoleLogs_CL\n| where ContainerGroupName_s startswith \"opcua-pipeline-job\"\n| where Log_s has \"[CRAWL]\" and Log_s has \"Downloaded=\"\n| parse Log_s with * \"Downloaded=\" Downloaded:long \" Skipped=\" Skipped:long \" Errors=\" Errors:long \" Queued=\" Queued:long\n| project TimeGenerated, Downloaded, Skipped, Errors, Queued\n| order by TimeGenerated asc","size":0,"title":"Crawl Progress Over Time","timeContext":{"durationMs":86400000},"queryType":0,"resourceType":"microsoft.operationalinsights/workspaces","visualization":"linechart","chartSettings":{"yAxis":["Downloaded","Queued","Errors"]}},"name":"crawl-progress"},{"type":3,"content":{"version":"KqlItem/1.0","query":"ContainerAppConsoleLogs_CL\n| where ContainerGroupName_s startswith \"opcua-pipeline-job\"\n| where Log_s has \"[CRAWL]\" and Log_s has \"Downloaded=\"\n| parse Log_s with * \"Downloaded=\" Downloaded:long \" Skipped=\" Skipped:long \" Errors=\" Errors:long *\n| summarize MaxDownloaded=max(Downloaded), MaxSkipped=max(Skipped), TotalErrors=max(Errors) by bin(TimeGenerated, 1h)\n| order by TimeGenerated desc\n| take 1","size":4,"title":"Latest Crawl Stats","timeContext":{"durationMs":86400000},"queryType":0,"resourceType":"microsoft.operationalinsights/workspaces","visualization":"tiles","tileSettings":{"showBorder":true}},"name":"crawl-stats"},{"type":3,"content":{"version":"KqlItem/1.0","query":"ContainerAppConsoleLogs_CL\n| where ContainerGroupName_s startswith \"opcua-pipeline-job\"\n| where Log_s has \"[INDEX]\" and Log_s has \"Phase=\"\n| parse Log_s with * \"Phase=\" Phase:string \" \" *\n| extend Embedded = extract(\"Embedded=([0-9]+)\", 1, Log_s)\n| extend Uploaded = extract(\"Uploaded=([0-9]+)\", 1, Log_s)\n| extend Chunks = extract(\"Chunks=([0-9]+)\", 1, Log_s)\n| extend Parsed = extract(\"Parsed=([0-9]+)\", 1, Log_s)\n| project TimeGenerated, Phase, Parsed, Chunks, Embedded, Uploaded\n| order by TimeGenerated asc","size":0,"title":"Index Progress Over Time","timeContext":{"durationMs":86400000},"queryType":0,"resourceType":"microsoft.operationalinsights/workspaces","visualization":"linechart"},"name":"index-progress"},{"type":3,"content":{"version":"KqlItem/1.0","query":"ContainerAppConsoleLogs_CL\n| where ContainerGroupName_s startswith \"opcua-pipeline-job\"\n| where Log_s has \"Error=\" or Log_s has \"error\" or Log_s has \"Warning\"\n| project TimeGenerated, Log_s\n| order by TimeGenerated desc\n| take 50","size":1,"title":"Errors & Warnings","timeContext":{"durationMs":604800000},"queryType":0,"resourceType":"microsoft.operationalinsights/workspaces","visualization":"table"},"name":"errors"},{"type":3,"content":{"version":"KqlItem/1.0","query":"ContainerAppConsoleLogs_CL\n| where ContainerGroupName_s startswith \"opcua-pipeline-job\"\n| where Log_s has \"[PIPELINE]\" and Log_s has \"TotalElapsedSec=\"\n| parse Log_s with * \"TotalElapsedSec=\" ElapsedSec:long\n| project TimeGenerated, DurationMin=ElapsedSec/60.0\n| order by TimeGenerated desc\n| take 10","size":1,"title":"Execution History (Duration in Minutes)","timeContext":{"durationMs":2592000000},"queryType":0,"resourceType":"microsoft.operationalinsights/workspaces","visualization":"barchart"},"name":"exec-history"}],"isLocked":false}
 '''
@@ -452,3 +610,5 @@ output acrLoginServer string = acr.properties.loginServer
 output mcpEndpoint string = 'https://${search.name}.search.windows.net/knowledgebases/${prefix}-kb/mcp?api-version=2025-11-01-preview'
 
 output mcpServerEndpoint string = 'https://${mcpServer.properties.configuration.ingress.fqdn}'
+output agentEndpoint string = 'https://${agent.properties.configuration.ingress.fqdn}'
+output botName string = empty(botAppId) ? '' : bot.name

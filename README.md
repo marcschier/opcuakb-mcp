@@ -18,7 +18,7 @@ An Azure AI Search agentic retrieval pipeline that exposes the complete OPC UA r
 
 🔧 **11 purpose-built MCP tools** — RAG Q&A, structured search, compliance validation, version comparison, and information model design suggestions — all accessible via a single MCP endpoint. AI agents can ask natural language questions, find specific ObjectTypes, check a NodeSet against a companion spec, or get help designing a new information model without leaving their workflow.
 
-🏢 **Microsoft 365 Copilot agent** — Use the Knowledge Base directly from Microsoft 365 Copilot Chat, Teams, Word, PowerPoint, and Outlook. The declarative agent in [`agents/m365-copilot/`](agents/m365-copilot/) packages the MCP tools as a Microsoft 365 Copilot extension that any user in your tenant can install and use.
+🏢 **Microsoft 365 Copilot agent** — Use the Knowledge Base directly from Microsoft Teams and Microsoft 365 Copilot Chat. The custom engine agent in [`agents/m365-agent/`](agents/m365-agent/) is a fully custom Bot Framework bot built on the Microsoft 365 Agents SDK and powered by the same Foundry GPT-4o + Azure AI Search RAG pipeline.
 
 🧬 **Type hierarchy resolution** — Cross-file ObjectType inheritance is fully resolved with alias and namespace normalization. Every ObjectType includes its complete supertype chain, declared member counts, and inherited member totals. This is the kind of deep structural insight that's tedious to extract manually from XML files.
 
@@ -179,24 +179,40 @@ https://<mcp-server-fqdn>/
 
 ## 🤖 Microsoft 365 Copilot Agent
 
-A declarative agent (`agents/m365-copilot/`) lets you use the OPC UA Knowledge Base inside **Microsoft 365 Copilot Chat**, **Teams**, **Word**, **PowerPoint**, and **Outlook**. The agent uses our deployed MCP server as its backend — no extra hosting needed.
+A **custom engine agent** (`agents/m365-agent/` + `src/OpcUaKb.Agent/`) lets you use the OPC UA Knowledge Base inside **Microsoft Teams** and **Microsoft 365 Copilot** as a conversational bot. Unlike a declarative agent, this is a fully custom Bot Framework agent — built on the Microsoft 365 Agents SDK, hosted on Azure Container Apps, and powered by the same Foundry GPT-4o + Azure AI Search RAG pipeline as our other tools.
 
 ```bash
-# Open the agent project in VS Code with the Microsoft 365 Agents Toolkit extension
-cd agents/m365-copilot
-code .
-# Then click "Provision" in the Agents Toolkit Lifecycle pane
+# One command to deploy: creates Entra app, builds image, deploys Bicep, packages Teams manifest
+./scripts/install-agent.sh        # Bash
+.\scripts\install-agent.ps1       # PowerShell (Windows)
 ```
 
-See [`agents/m365-copilot/README.md`](agents/m365-copilot/README.md) for prerequisites, sideloading, and publishing instructions.
+The script outputs a Teams app `.zip` ready to sideload via Teams Admin Center → Integrated apps → Upload Custom App. The agent then appears in Teams chats and Microsoft 365 Copilot.
 
-## 💬 Interactive Chatbot
+| Channel | Status |
+|---|---|
+| Microsoft Teams (personal, group, channel) | ✅ |
+| Microsoft 365 Copilot Chat | ✅ |
+| Bot Framework Web Chat (testing) | ✅ |
+
+See [`agents/m365-agent/README.md`](agents/m365-agent/README.md) for setup details, local development with `teamsapptester`, and manual deployment options.
+
+## 💬 Local Development
+
+For local interactive testing, run the agent web app and chat with it via the Microsoft 365 Agents Playground:
 
 ```bash
-export SEARCH_API_KEY="$(az search admin-key show --service-name <prefix>-search -g <rg> --query primaryKey -o tsv)"
-# AOAI auth: set AOAI_API_KEY for key auth, or `az login` for DefaultAzureCredential
-dotnet run --project src/OpcUaKb.Chat
+# Terminal 1: run the agent locally
+SEARCH_API_KEY="$(az search admin-key show --service-name <prefix>-search -g <rg> --query primaryKey -o tsv)"
+AOAI_API_KEY="$(az cognitiveservices account keys list -n <prefix>-foundry -g <rg> --query key1 -o tsv)"
+AOAI_ENDPOINT="https://<prefix>-foundry.openai.azure.com"
+dotnet run --project src/OpcUaKb.Agent
+# Terminal 2: launch the playground (requires npm)
+npm install -g @microsoft/teams-app-test-tool
+teamsapptester
 ```
+
+The Agents Playground opens in your browser and connects to the local agent on port 3978.
 
 ## ⚙️ Pipeline
 

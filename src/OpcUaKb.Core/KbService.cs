@@ -11,7 +11,7 @@ using Azure.Identity;
 // the grounded context to GPT-4o for answer synthesis.
 // ═══════════════════════════════════════════════════════════════════════
 
-sealed class KbService
+public sealed class KbService
 {
     const string DefaultKbName = "opcua-kb";
     const string DefaultGptDeployment = "gpt-4o";

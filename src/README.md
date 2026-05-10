@@ -8,7 +8,8 @@ All projects target .NET 10 with nullable enabled and implicit usings.
 |---------|------|-------------|
 | [`OpcUaKb.Pipeline`](OpcUaKb.Pipeline/) | Console (Container Apps Job) | Combined crawl + index + NodeSet parse + CloudLib pipeline |
 | [`OpcUaKb.McpServer`](OpcUaKb.McpServer/) | Web (Container App) | MCP server with 11 tools — search, RAG Q&A, compliance, modelling (HTTP/SSE + stdio) |
-| [`OpcUaKb.Chat`](OpcUaKb.Chat/) | Console | Interactive chatbot grounded by the knowledge base |
+| [`OpcUaKb.Agent`](OpcUaKb.Agent/) | Web (Container App) | Bot Framework / Microsoft 365 Agents SDK custom engine agent for Teams + M365 Copilot |
+| [`OpcUaKb.Core`](OpcUaKb.Core/) | Library | Shared `KbService` (KB retrieve + GPT-4o synthesis) used by McpServer + Agent |
 | [`OpcUaKb.Setup`](OpcUaKb.Setup/) | Console | Creates Web Knowledge Source, Knowledge Base, verifies MCP endpoint |
 | [`OpcUaKb.Crawler`](OpcUaKb.Crawler/) | Console | Standalone BFS web crawler for `*.opcfoundation.org` |
 | [`OpcUaKb.Indexer`](OpcUaKb.Indexer/) | Console | Standalone HTML chunker + embedder + search indexer |
@@ -31,18 +32,21 @@ There are no unit tests — `OpcUaKb.Test` is a console app requiring live Azure
 | Package | Version | Used By |
 |---------|---------|---------|
 | `Azure.Search.Documents` | 11.8.0-beta.1 | Pipeline, Indexer, McpServer |
-| `Azure.AI.OpenAI` | 2.9.0-beta.1 | Pipeline, Indexer, Chat |
-| `Azure.Identity` | latest | McpServer, Chat (DefaultAzureCredential for AOAI) |
-| `ModelContextProtocol` | 1.2.0 | McpServer |
+| `Azure.AI.OpenAI` | 2.9.0-beta.1 | Pipeline, Indexer |
+| `Azure.Identity` | 1.14.2 | Core (DefaultAzureCredential for AOAI) |
+| `ModelContextProtocol.AspNetCore` | 1.2.0 | McpServer |
+| `Microsoft.Agents.Hosting.AspNetCore` | 1.2.41 | Agent (Bot Framework hosting) |
+| `Microsoft.Agents.Authentication.Msal` | 1.2.41 | Agent (Entra ID auth) |
 
 ## Conventions
 
-- **Top-level statements** for all console apps (Pipeline, Chat, Setup, Test, McpServer)
+- **Top-level statements** for all console apps (Pipeline, Setup, Test)
 - **Sealed classes** preferred
 - **No explicit namespaces** in Pipeline project
 - **Structured logging**: `[PHASE] Key=Value` format for KQL dashboard queries
 - **HttpClient**: shared instances only — never `new HttpClient()` in loops (causes socket exhaustion)
 - **Error handling**: `RetryHelper.RetrySearchAsync()` for Azure Search SDK calls, `RetryHelper.RetryAsync()` for raw HTTP with `Retry-After` support
+- **Shared logic**: business code reusable across McpServer + Agent lives in `OpcUaKb.Core` (see `KbService`)
 
 ## Pipeline Phases
 
@@ -127,7 +131,52 @@ Tools are implemented as static classes with `[McpServerToolType]` and `[McpServ
 | Class | Purpose |
 |-------|---------|
 | `SearchService` | Shared Azure AI Search client for structured queries |
-| `KbService` | KB retrieve API + GPT-4o chat completion for RAG. Supports MI + API key auth. |
+| `KbService` | KB retrieve API + GPT-4o chat completion for RAG. Lives in `OpcUaKb.Core`, shared with Agent. |
+
+## Custom Engine Agent
+
+The Agent (`OpcUaKb.Agent`) is a Bot Framework / Microsoft 365 Agents SDK custom engine agent that exposes the OPC UA Knowledge Base as a conversational bot in Microsoft Teams and Microsoft 365 Copilot. It reuses `KbService` from `OpcUaKb.Core` for the RAG pipeline.
+
+### Architecture
+
+```
+User in Teams/M365 Copilot → Azure Bot Service (JWT signing)
+   → POST /api/messages → OpcUaKb.Agent (Container App)
+       → KbService.AskAsync (KB retrieve + GPT-4o)
+       → Reply Activity
+```
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SEARCH_ENDPOINT` | ✓ | | Azure AI Search endpoint |
+| `SEARCH_API_KEY` | ✓ | | Azure AI Search admin key |
+| `AOAI_ENDPOINT` | ✓ | | Azure OpenAI / Foundry endpoint |
+| `AOAI_API_KEY` | | | AOAI key auth (falls back to MI) |
+| `KB_NAME` | | `opcua-kb` | Knowledge base name |
+| `BOT_ID` | | (anonymous) | Entra app appId for Bot Framework auth |
+| `BOT_PASSWORD` | | | Entra app client secret |
+| `PORT` | | `3978` | HTTP listen port |
+
+### Local Testing
+
+```bash
+# Run the agent locally (anonymous mode — no BOT_ID needed)
+SEARCH_API_KEY="..." AOAI_API_KEY="..." \
+  AOAI_ENDPOINT="https://<prefix>-foundry.openai.azure.com" \
+  dotnet run --project src/OpcUaKb.Agent
+
+# In another terminal, run the Microsoft 365 Agents Playground
+npm install -g @microsoft/teams-app-test-tool
+teamsapptester
+```
+
+The Playground opens a browser-based chat UI connected to your local agent on port 3978.
+
+### Deployment
+
+Use `scripts/install-agent.ps1` (or `.sh`) — it creates the Entra app, deploys Bicep with the bot params, builds the image via ACR, and packages the Teams manifest. See [`scripts/README.md`](../scripts/README.md).
 
 ## Search Index Schema
 

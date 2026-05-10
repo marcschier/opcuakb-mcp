@@ -19,9 +19,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Azure.Identity" Version="1.14.2" />
     <PackageReference Include="Azure.Search.Documents" Version="11.8.0-beta.1" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" Version="1.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpcUaKb.Core\OpcUaKb.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>
