@@ -700,20 +700,14 @@ sealed class OpcUaCrawler : IDisposable
         // Append .xml for API nodeset endpoints that serve XML
         if (contentType?.Contains("xml") == true && !path.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
             path += ".xml";
-        // Append .html for HTML responses whose URL has no file extension
-        // (e.g., /DI/v102/docs/1). Without this, the indexer's name-based .html
-        // filter silently drops these blobs and older spec versions go unindexed.
-        if (contentType?.StartsWith("text/html", StringComparison.OrdinalIgnoreCase) == true
-            && !HasFileExtension(path))
-            path += ".html";
+        // NOTE: We previously appended ".html" for HTML responses on URLs without
+        // a filename extension (e.g., /DI/v102/docs/1 -> /DI/v102/docs/1.html).
+        // That was needed when the indexer filtered blobs by name suffix only.
+        // The indexer now accepts blobs by text/html Content-Type as well, so
+        // the append is redundant — and harmful, because it created duplicate
+        // blobs alongside extensionless blobs from earlier crawls (and produced
+        // 404-ing citation URLs of the form .../5.6.html).
         return prefix + path;
-    }
-
-    static bool HasFileExtension(string path)
-    {
-        var lastSlash = path.LastIndexOf('/');
-        var fileName = lastSlash >= 0 ? path[(lastSlash + 1)..] : path;
-        return fileName.Contains('.');
     }
 
     async Task LoadStateAsync()
@@ -809,6 +803,25 @@ sealed class OpcUaIndexer
                 htmlBlobs.Add(item.Name);
             }
         }
+        // Dedupe blobs that exist in BOTH extensionless and .html-suffixed forms
+        // (created by older crawler runs that appended .html for HTML responses
+        // without a filename extension). The two map to the same source_url after
+        // BlobNameToSourceUrl normalization, so indexing both wastes embedding
+        // quota and double-counts chunks. Prefer the extensionless form.
+        var extensionless = new HashSet<string>(
+            htmlBlobs.Where(n => !n.EndsWith(".html", StringComparison.OrdinalIgnoreCase)),
+            StringComparer.OrdinalIgnoreCase);
+        var dedupedHtml = htmlBlobs.Where(n =>
+        {
+            if (!n.EndsWith(".html", StringComparison.OrdinalIgnoreCase)) return true;
+            if (n.EndsWith("/index.html", StringComparison.OrdinalIgnoreCase)) return true; // /index.html is a distinct form
+            var stripped = n[..^".html".Length];
+            return !extensionless.Contains(stripped);
+        }).ToList();
+        if (dedupedHtml.Count != htmlBlobs.Count)
+            _log.LogInformation("[INDEX] Deduped {Removed} duplicate .html blobs (had extensionless variants)",
+                htmlBlobs.Count - dedupedHtml.Count);
+        htmlBlobs = dedupedHtml;
         _log.LogInformation("[INDEX] HtmlBlobs={Count}", htmlBlobs.Count);
         await _tracker.UpdateAsync("index", "running", htmlBlobs: htmlBlobs.Count);
         if (htmlBlobs.Count == 0) return;
@@ -824,7 +837,7 @@ sealed class OpcUaIndexer
             {
                 var dl = await _container.GetBlobClient(blobName).DownloadContentAsync();
                 var html = dl.Value.Content.ToString();
-                var sourceUrl = $"https://reference.opcfoundation.org/{blobName.Replace('\\', '/')}";
+                var sourceUrl = BlobNameToSourceUrl(blobName);
                 var (part, ver) = ExtractSpecInfo(blobName);
                 var versionEntry = _versionCatalog.Lookup(blobName);
                 var doc = await parser.ParseDocumentAsync(html);
@@ -1085,6 +1098,28 @@ sealed class OpcUaIndexer
 
     static (string part, string version) ExtractSpecInfo(string blobName) =>
         VersionCatalog.ExtractSpecInfoFromPath(blobName);
+
+    // Build a canonical reference.opcfoundation.org URL from a blob name,
+    // stripping artefacts the crawler adds (.html suffix on extensionless paths,
+    // index.html directory-default) so citations link to working pages.
+    //
+    // Examples:
+    //   Core/Part3/v105/docs/5.6           -> https://reference.opcfoundation.org/Core/Part3/v105/docs/5.6
+    //   Core/Part3/v105/docs/5.6.html      -> https://reference.opcfoundation.org/Core/Part3/v105/docs/5.6
+    //   v105/Core/docs/Part3/5.8.3/index.html
+    //                                      -> https://reference.opcfoundation.org/v105/Core/docs/Part3/5.8.3
+    //   DI/v104/docs/1                     -> https://reference.opcfoundation.org/DI/v104/docs/1
+    internal static string BlobNameToSourceUrl(string blobName)
+    {
+        var name = blobName.Replace('\\', '/');
+        if (name.EndsWith("/index.html", StringComparison.OrdinalIgnoreCase))
+            name = name[..^"/index.html".Length];
+        else if (name.Equals("index.html", StringComparison.OrdinalIgnoreCase))
+            name = "";
+        else if (name.EndsWith(".html", StringComparison.OrdinalIgnoreCase))
+            name = name[..^".html".Length];
+        return $"https://reference.opcfoundation.org/{name}";
+    }
 
     static string TableToMarkdown(IElement table)
     {
