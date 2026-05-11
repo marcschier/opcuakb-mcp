@@ -62,12 +62,14 @@ sealed class OpcUaNodeSetParser
     // ── Type hierarchy data (populated during ParseAllAsync) ────────────
     readonly Dictionary<string, TypeInfo> _typeRegistry = new(StringComparer.Ordinal);
 
-    /// <summary>Type hierarchy information for a single ObjectType node.</summary>
+    /// <summary>Type hierarchy information for a single subtype-able type node
+    /// (ObjectType, VariableType, or DataType).</summary>
     internal sealed class TypeInfo
     {
         public required string GlobalNodeId { get; init; }
         public required string BrowseName { get; init; }
         public required string Spec { get; init; }
+        public required string NodeClass { get; init; }
         public string? SupertypeGlobalId { get; set; }
         public bool HierarchyComplete { get; set; } = true;
 
@@ -82,6 +84,11 @@ sealed class OpcUaNodeSetParser
         public int TotalObjects { get; set; }
         public bool TotalComputed { get; set; }
     }
+
+    /// <summary>Returns true if the given node class participates in HasSubtype
+    /// hierarchies that we resolve and emit hierarchy docs for.</summary>
+    static bool IsSubtypeableTypeClass(string nc) =>
+        nc is "ObjectType" or "VariableType" or "DataType";
 
     /// <summary>Per-file metadata collected during parsing for hierarchy resolution.</summary>
     sealed class FileNodeInfo
@@ -174,7 +181,7 @@ sealed class OpcUaNodeSetParser
         ComputeInheritedCounts();
 
         _log.LogInformation(
-            "[NODESET] Completed: {Docs} documents from {Files} files, {Types} ObjectTypes with hierarchy",
+            "[NODESET] Completed: {Docs} documents from {Files} files, {Types} types (ObjectType + VariableType + DataType) with hierarchy",
             allDocs.Count, blobNames.Count, _typeRegistry.Count);
         return allDocs;
     }
@@ -335,7 +342,7 @@ sealed class OpcUaNodeSetParser
         var completeCount = _typeRegistry.Values.Count(t => t.HierarchyComplete);
         var partialCount = _typeRegistry.Values.Count(t => !t.HierarchyComplete);
         master.AppendLine();
-        master.AppendLine($"Type hierarchy: {_typeRegistry.Count} ObjectTypes resolved, {completeCount} with complete hierarchy, {partialCount} with partial (missing supertype data)");
+        master.AppendLine($"Type hierarchy: {_typeRegistry.Count} types (ObjectType/VariableType/DataType) resolved, {completeCount} with complete hierarchy, {partialCount} with partial (missing supertype data)");
 
         summaries.Add(new SearchDocument(new Dictionary<string, object>
         {
@@ -384,15 +391,21 @@ sealed class OpcUaNodeSetParser
             }
 
             var hb = new StringBuilder();
-            hb.AppendLine($"ObjectType: {t.BrowseName} (Companion Spec: {t.Spec})");
+            hb.AppendLine($"{t.NodeClass}: {t.BrowseName} (Companion Spec: {t.Spec})");
             if (chain.Count > 0)
                 hb.AppendLine($"Supertype chain: {string.Join(" → ", chain)}");
             else
                 hb.AppendLine("Supertype chain: (none / root type)");
             hb.AppendLine($"Hierarchy status: {completeness}");
-            hb.AppendLine($"Declared members: {declared} ({t.DeclaredVariables} Variables, {t.DeclaredMethods} Methods, {t.DeclaredObjects} Objects)");
-            hb.AppendLine($"Inherited members: {inherited}");
-            hb.AppendLine($"Total members (declared + inherited): {total} ({t.TotalVariables} Variables, {t.TotalMethods} Methods, {t.TotalObjects} Objects)");
+
+            // DataTypes don't have child Variables/Methods/Objects — only the
+            // supertype chain is meaningful. Skip the member-count lines for them.
+            if (t.NodeClass != "DataType")
+            {
+                hb.AppendLine($"Declared members: {declared} ({t.DeclaredVariables} Variables, {t.DeclaredMethods} Methods, {t.DeclaredObjects} Objects)");
+                hb.AppendLine($"Inherited members: {inherited}");
+                hb.AppendLine($"Total members (declared + inherited): {total} ({t.TotalVariables} Variables, {t.TotalMethods} Methods, {t.TotalObjects} Objects)");
+            }
 
             summaries.Add(new SearchDocument(new Dictionary<string, object>
             {
@@ -404,7 +417,7 @@ sealed class OpcUaNodeSetParser
                 ["section_title"] = t.BrowseName,
                 ["content_type"] = "nodeset_hierarchy",
                 ["chunk_index"] = 0,
-                ["node_class"] = "ObjectType",
+                ["node_class"] = t.NodeClass,
                 ["modelling_rule"] = "",
                 ["browse_name"] = t.BrowseName,
                 ["parent_type"] = chain.Count > 0 ? chain[0] : "",
@@ -441,9 +454,40 @@ sealed class OpcUaNodeSetParser
             if (name != null) aliases[name] = value;
         }
 
-        var primaryNsUri = namespaceUris.Count > 0 ? namespaceUris[0] : "";
+        // Determine the file's OWN namespace from <Models><Model ModelUri="...">.
+        // NamespaceUris[0] is unreliable — it's frequently a dependency (e.g. DI)
+        // rather than this file's own namespace, which leads to dependency nodes
+        // being tagged with this file's spec_part and vice versa.
+        var ownNsUri = root.Element(Ns + "Models")
+            ?.Elements(Ns + "Model")
+            .Select(m => m.Attribute("ModelUri")?.Value)
+            .FirstOrDefault(v => !string.IsNullOrEmpty(v));
+
+        // Fall back to the LAST NamespaceUris entry (also a common convention)
+        // or to namespaceUris[0] as a last resort if no <Models> element is present.
+        if (string.IsNullOrEmpty(ownNsUri))
+            ownNsUri = namespaceUris.Count > 0 ? namespaceUris[^1] : "";
+
+        var primaryNsUri = ownNsUri ?? "";
+
+        // Find the 1-based index of the own namespace in NamespaceUris.
+        // NodeIds use ns=N where N is 1-based (ns=0 = OPC UA core; implicit if no ns prefix).
+        int ownNsIndex = 0; // 0 means "no own namespace resolved" — don't filter
+        for (int i = 0; i < namespaceUris.Count; i++)
+        {
+            if (string.Equals(namespaceUris[i].TrimEnd('/'), primaryNsUri.TrimEnd('/'),
+                StringComparison.OrdinalIgnoreCase))
+            {
+                ownNsIndex = i + 1;
+                break;
+            }
+        }
+
         var specName = ExtractSpecName(primaryNsUri, blobName);
         var specVersion = ExtractSpecVersion(blobName);
+
+        _log.LogInformation("[NODESET] File={Blob} OwnNs={NsUri} OwnNsIndex={Index}",
+            blobName, primaryNsUri, ownNsIndex);
 
         // Build NodeId → BrowseName lookup for parent resolution
         var nodeIndex = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -475,6 +519,19 @@ sealed class OpcUaNodeSetParser
                 continue;
 
             var nodeId = el.Attribute("NodeId")?.Value ?? "";
+
+            // Per-node namespace filter: skip nodes whose NodeId is not in this
+            // file's OWN namespace. Dependency-namespace nodes (e.g. ns=1 referring
+            // to DI from a Cranes NodeSet) are merely referenced here — they're
+            // properly indexed by the file that actually owns them. Also skips
+            // core (ns=0) nodes for the same reason.
+            if (ownNsIndex > 0)
+            {
+                var nodeIdNs = GetNodeIdNamespace(nodeId);
+                if (nodeIdNs != ownNsIndex)
+                    continue;
+            }
+
             var browseName = StripNamespacePrefix(el.Attribute("BrowseName")?.Value ?? "");
             var dataType = el.Attribute("DataType")?.Value ?? "";
             var parentNodeId = el.Attribute("ParentNodeId")?.Value;
@@ -524,8 +581,8 @@ sealed class OpcUaNodeSetParser
                     parentType = pName;
             }
 
-            // Register ObjectType in hierarchy
-            if (nodeClass == "ObjectType" && !string.IsNullOrEmpty(nodeId))
+            // Register ObjectType / VariableType / DataType in hierarchy
+            if (IsSubtypeableTypeClass(nodeClass) && !string.IsNullOrEmpty(nodeId))
             {
                 var globalId = localToGlobal.GetValueOrDefault(nodeId)
                     ?? ResolveGlobalNodeId(nodeId, namespaceUris, aliases);
@@ -538,6 +595,7 @@ sealed class OpcUaNodeSetParser
                     GlobalNodeId = globalId,
                     BrowseName = browseName,
                     Spec = specName,
+                    NodeClass = nodeClass,
                     SupertypeGlobalId = supertypeGlobalId,
                 });
             }
@@ -582,13 +640,26 @@ sealed class OpcUaNodeSetParser
         }
 
         return (docs, fileNodes, localToGlobal);
+
+        // Parses the namespace index from a NodeId string.
+        // Format: "ns=N;i=123" or "ns=N;s=Foo" or "i=123" (ns=0 implied).
+        static int GetNodeIdNamespace(string nodeId)
+        {
+            if (string.IsNullOrEmpty(nodeId)) return 0;
+            if (!nodeId.StartsWith("ns=", StringComparison.Ordinal)) return 0;
+            var semi = nodeId.IndexOf(';');
+            if (semi < 0) return 0;
+            return int.TryParse(nodeId.AsSpan(3, semi - 3), out var n) ? n : 0;
+        }
     }
 
     // ── Hierarchy computation ───────────────────────────────────────────
 
     /// <summary>
-    /// Counts declared members (Variables, Methods, Objects) for each ObjectType
-    /// by walking the node tree within each file. Counts ALL descendants, not just direct children.
+    /// Counts declared members (Variables, Methods, Objects) for each subtype-able type
+    /// (ObjectType / VariableType / DataType) by walking the node tree within each file.
+    /// Counts ALL descendants, not just direct children. For DataTypes this typically
+    /// yields zero — that's expected and harmless.
     /// </summary>
     void ComputeDeclaredCounts(List<FileNodeInfo> fileNodes, Dictionary<string, string> localToGlobal)
     {
@@ -605,10 +676,10 @@ sealed class OpcUaNodeSetParser
             list.Add(node);
         }
 
-        // For each ObjectType in this file, count all descendants
+        // For each subtype-able type in this file, count all descendants
         foreach (var node in fileNodes)
         {
-            if (node.NodeClass != "ObjectType") continue;
+            if (!IsSubtypeableTypeClass(node.NodeClass)) continue;
             if (!_typeRegistry.TryGetValue(node.GlobalNodeId, out var typeInfo)) continue;
 
             var (vars, methods, objects) = CountDescendants(node.LocalNodeId, childMap, []);
@@ -643,8 +714,8 @@ sealed class OpcUaNodeSetParser
     }
 
     /// <summary>
-    /// Computes total member counts (declared + inherited) for all ObjectTypes
-    /// by walking supertype chains with memoization.
+    /// Computes total member counts (declared + inherited) for all registered types
+    /// (ObjectType / VariableType / DataType) by walking supertype chains with memoization.
     /// </summary>
     void ComputeInheritedCounts()
     {
@@ -655,7 +726,7 @@ sealed class OpcUaNodeSetParser
 
         var complete = _typeRegistry.Values.Count(t => t.HierarchyComplete);
         _log.LogInformation(
-            "[HIERARCHY] {Total} ObjectTypes, {Complete} with complete hierarchy, {Partial} partial",
+            "[HIERARCHY] {Total} types (ObjectType + VariableType + DataType), {Complete} with complete hierarchy, {Partial} partial",
             _typeRegistry.Count, complete, _typeRegistry.Count - complete);
     }
 

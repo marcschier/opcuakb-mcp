@@ -186,15 +186,18 @@ try
                     "nodeset_hierarchy" => "cloudlib_hierarchy",
                     _ => $"cloudlib_{ct}",
                 };
-                doc["source"] = "cloudlib";
-                doc["popularity"] = 0L; // default; overwritten below if metadata matches
 
                 // Look up metadata by namespace_uri (emitted by NodeSetParser on every doc)
                 var nsUri = doc.TryGetValue("namespace_uri", out var n) ? n?.ToString() ?? "" : "";
 
                 // Flag whether this namespace already exists in the crawled opcfoundation index
-                doc["in_opcfoundation_index"] = !string.IsNullOrEmpty(nsUri)
+                var inOpcfoundation = !string.IsNullOrEmpty(nsUri)
                     && opcfNamespaces.Contains(nsUri.TrimEnd('/'));
+                doc["in_opcfoundation_index"] = inOpcfoundation;
+                // Keep source=opcfoundation for specs that are also in the crawled index;
+                // only tag as cloudlib for specs that exist ONLY in the UA CloudLibrary.
+                doc["source"] = inOpcfoundation ? "opcfoundation" : "cloudlib";
+                doc["popularity"] = inOpcfoundation ? 1_000_000_000L : 0L; // default; overwritten below if metadata matches
 
                 if (string.IsNullOrEmpty(nsUri) || !metaByNs.TryGetValue(nsUri, out var meta))
                     continue;
@@ -246,9 +249,6 @@ try
                     var x when x.StartsWith("cloudlib_") => x,
                     _ => $"cloudlib_{ct}",
                 };
-                doc["source"] = "cloudlib";
-                doc["popularity"] = 0L; // default; overwritten below if a representative doc matches
-                doc["in_opcfoundation_index"] = false; // default; overwritten below
 
                 // Enrich summary page_chunk with the CloudLib title + description if we have matching metadata
                 var spec = doc.TryGetValue("spec_part", out var sp) ? sp?.ToString() ?? "" : "";
@@ -293,6 +293,19 @@ try
                     if (firstForSpec.TryGetValue("is_latest", out var il)) doc["is_latest"] = il!;
                     if (firstForSpec.TryGetValue("version_rank", out var vr)) doc["version_rank"] = vr!;
                 }
+
+                // Resolve source/popularity from the representative doc's namespace.
+                // If the namespace was also crawled from reference.opcfoundation.org, surface
+                // the summary as an opcfoundation spec so list_specs source=opcfoundation
+                // returns it. Falls back to cloudlib when firstForSpec is null or has no namespace.
+                var summaryNsUri = firstForSpec != null
+                    && firstForSpec.TryGetValue("namespace_uri", out var nu)
+                    ? nu?.ToString() ?? "" : "";
+                var inOpcfoundation = !string.IsNullOrEmpty(summaryNsUri)
+                    && opcfNamespaces.Contains(summaryNsUri.TrimEnd('/'));
+                doc["in_opcfoundation_index"] = inOpcfoundation;
+                doc["source"] = inOpcfoundation ? "opcfoundation" : "cloudlib";
+                doc["popularity"] = inOpcfoundation ? 1_000_000_000L : 0L;
             }
 
             var allCloudDocs = cloudDocs.Concat(cloudSummaries).ToList();
