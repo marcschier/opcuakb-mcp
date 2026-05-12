@@ -8,3 +8,5 @@ nupkg/
 
 pipeline-status.json
 agents/m365-agent/appPackage/build/
+
+src/OpcUaKb.HostedAgent/.azure/
