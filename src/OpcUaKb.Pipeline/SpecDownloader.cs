@@ -112,6 +112,14 @@ sealed class SpecDownloader
     async Task DownloadOneAsync(
         VersionRef v, string url, string blobName, string contentType, CancellationToken ct)
     {
+        // Defensive absolutization. SpecCatalog should already deliver absolute
+        // URLs but historical regressions (and any future caller) have shipped
+        // relative hrefs straight from anchor tags; HttpClient.GetAsync rejects
+        // those with "An invalid request URI was provided." Wrap once here so
+        // a single broken extractor can't take out the entire SPEC_DOWNLOAD phase.
+        if (!string.IsNullOrEmpty(url) && url.StartsWith('/'))
+            url = "https://reference.opcfoundation.org" + url;
+
         try
         {
             var blobClient = _container.GetBlobClient(blobName);

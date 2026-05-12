@@ -832,7 +832,17 @@ static class EmbeddingClient
                 clone.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token.Token);
                 return await http.SendAsync(clone);
             }, log);
-        resp.EnsureSuccessStatusCode();
+        if (!resp.IsSuccessStatusCode)
+        {
+            // Read the response body so callers can see WHICH input was rejected
+            // (Azure OpenAI 400s typically name the offending element/field).
+            var errorBody = await resp.Content.ReadAsStringAsync();
+            // Truncate to keep KQL log lines manageable.
+            if (errorBody.Length > 4000) errorBody = errorBody[..4000] + "…(truncated)";
+            resp.Dispose();
+            throw new HttpRequestException(
+                $"Embeddings call failed with HTTP {(int)resp.StatusCode}. Body: {errorBody}");
+        }
         var json = JsonNode.Parse(await resp.Content.ReadAsStringAsync())!;
         return json["data"]!.AsArray()
             .Select(d => d!["embedding"]!.AsArray().Select(v => v!.GetValue<float>()).ToArray())

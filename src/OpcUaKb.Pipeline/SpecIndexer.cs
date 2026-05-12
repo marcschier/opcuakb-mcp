@@ -34,6 +34,10 @@ sealed class SpecIndexer
     const int EmbeddingBatchSize = 50;
     const int UploadBatchSize = 100;
     const int EmbeddingDimensions = 3072;
+
+    // text-embedding-3-large hard-caps each input at 8191 tokens. We truncate
+    // at ~30 K characters (≈ 7 K tokens) to leave headroom for tokenizer slop.
+    const int MaxEmbeddingChars = 30_000;
     const string EmbeddingDeployment = "text-embedding-3-large";
 
     // Estimate ~200 tokens per chunk and ~120 K TPM of embedding capacity.
@@ -132,6 +136,25 @@ sealed class SpecIndexer
         await EnsureIndexV2Async();
         _log.LogInformation("[SPEC_INDEX] Phase=index_ready Index={Name}", IndexName);
 
+        // Preflight: count STS XML blobs. If SpecDownloader didn't manage to
+        // pull a single one (e.g. relative-URL regression cascaded), bail
+        // early instead of grinding through ~25 K chunks with no metadata.
+        var stsCount = 0;
+        await foreach (var _ in _container.GetBlobsAsync(
+            BlobTraits.None, BlobStates.None, prefix: "sts-xml/", cancellationToken: ct))
+        {
+            stsCount++;
+            if (stsCount >= 1) break;
+        }
+        if (stsCount == 0)
+        {
+            _log.LogError(
+                "[SPEC_INDEX] Phase=index_aborted Reason=NoStsXmlBlobs " +
+                "Hint=SpecDownloader produced 0 sts-xml/ blobs; skipping spec_index to avoid wasted compute. " +
+                "Check SPEC_DOWNLOAD logs for upstream URL extraction failures.");
+            return new IndexResult(0, 0, 0, 0);
+        }
+
         var versions = new List<(string SpecId, string Version, string BlobName)>();
         await foreach (var item in _container.GetBlobsAsync(
             BlobTraits.None, BlobStates.None, prefix: "html/", cancellationToken: ct))
@@ -151,6 +174,7 @@ sealed class SpecIndexer
         var ready = new List<SearchDocument>(UploadBatchSize);
 
         var totalChunks = 0;
+        var skippedEmpty = 0;
         var embedded = 0;
         var uploaded = 0;
         var errors = 0;
@@ -200,15 +224,23 @@ sealed class SpecIndexer
                 var chunkIndex = 0;
                 foreach (var chunk in htmlParser.ParseSections(html, metadata, sts?.SectionSlugByNumber))
                 {
+                    // Skip pure-heading sections (page_chunk would be empty/whitespace);
+                    // Azure OpenAI rejects empty inputs with HTTP 400.
+                    if (string.IsNullOrWhiteSpace(chunk.PageChunk))
+                    {
+                        skippedEmpty++;
+                        continue;
+                    }
+
                     unembedded.Add(BuildSearchDocument(metadata, chunk, chunkIndex++));
                     totalChunks++;
 
                     if (unembedded.Count >= EmbeddingBatchSize)
                     {
-                        var ok = await EmbedBatchAsync(unembedded);
-                        if (ok) embedded += unembedded.Count;
-                        else errors += unembedded.Count;
-                        ready.AddRange(unembedded);
+                        var (ok, fail) = await EmbedBatchAsync(unembedded);
+                        embedded += ok;
+                        errors += fail;
+                        ready.AddRange(unembedded.Where(d => d.ContainsKey("page_chunk_vector")));
                         unembedded.Clear();
 
                         while (ready.Count >= UploadBatchSize)
@@ -233,8 +265,8 @@ sealed class SpecIndexer
             if (processedBlobs % 10 == 0)
             {
                 _log.LogInformation(
-                    "[SPEC_INDEX] Phase=progress ProcessedBlobs={P} TotalVersions={T} Chunks={C} Embedded={E} Uploaded={U} Errors={Err}",
-                    processedBlobs, versions.Count, totalChunks, embedded, uploaded, errors);
+                    "[SPEC_INDEX] Phase=progress ProcessedBlobs={P} TotalVersions={T} Chunks={C} SkippedEmpty={SE} Embedded={E} Uploaded={U} Errors={Err}",
+                    processedBlobs, versions.Count, totalChunks, skippedEmpty, embedded, uploaded, errors);
             }
             if (totalChunks - lastChunkLogged >= 500)
             {
@@ -248,10 +280,10 @@ sealed class SpecIndexer
         // Final flush: embed any remaining unembedded docs, then upload everything.
         if (unembedded.Count > 0)
         {
-            var ok = await EmbedBatchAsync(unembedded);
-            if (ok) embedded += unembedded.Count;
-            else errors += unembedded.Count;
-            ready.AddRange(unembedded);
+            var (ok, fail) = await EmbedBatchAsync(unembedded);
+            embedded += ok;
+            errors += fail;
+            ready.AddRange(unembedded.Where(d => d.ContainsKey("page_chunk_vector")));
             unembedded.Clear();
         }
 
@@ -266,7 +298,8 @@ sealed class SpecIndexer
         }
 
         _log.LogInformation(
-            "[SPEC_INDEX] Phase=upload Status=completed Indexed={N}", uploaded);
+            "[SPEC_INDEX] Phase=upload Status=completed Indexed={N} SkippedEmpty={SE} Errors={Err}",
+            uploaded, skippedEmpty, errors);
 
         return new IndexResult(totalChunks, embedded, uploaded, errors);
     }
@@ -318,27 +351,80 @@ sealed class SpecIndexer
         return new SearchDocument(dict);
     }
 
-    async Task<bool> EmbedBatchAsync(List<SearchDocument> batch)
+    /// <summary>
+    /// Embed every doc in <paramref name="batch"/> in place, writing the
+    /// resulting vector into each doc's <c>page_chunk_vector</c> field.
+    ///
+    /// Returns (embedded, failed). On batch-level HTTP 400, falls back to
+    /// per-chunk embedding so a single bad input can't poison the batch.
+    /// Empty / whitespace inputs are filtered upstream in <see cref="IndexAsync"/>;
+    /// oversized inputs are truncated at <see cref="MaxEmbeddingChars"/> chars
+    /// (the search doc keeps the full text — only the embedding input is
+    /// truncated, so retrieval still works).
+    /// </summary>
+    async Task<(int Embedded, int Failed)> EmbedBatchAsync(List<SearchDocument> batch)
     {
-        if (batch.Count == 0) return true;
+        if (batch.Count == 0) return (0, 0);
+
+        var inputs = batch.Select(d => TruncateForEmbedding((string)d["page_chunk"])).ToList();
+
         try
         {
-            var texts = batch.Select(d => (string)d["page_chunk"]).ToList();
             var vectors = await EmbeddingClient.GetEmbeddingsAsync(
-                _http, _credential, _aoaiEndpoint, EmbeddingDeployment, texts, _log);
+                _http, _credential, _aoaiEndpoint, EmbeddingDeployment, inputs, _log);
 
             for (var i = 0; i < batch.Count && i < vectors.Count; i++)
                 batch[i]["page_chunk_vector"] = vectors[i];
 
-            return true;
+            return (batch.Count, 0);
         }
         catch (Exception ex)
         {
+            // Batch-level failure. Log full diagnostic (EmbeddingClient now
+            // includes the response body in the exception message on 400),
+            // then retry one-at-a-time so a single bad chunk only loses itself.
             _log.LogWarning(
-                "[SPEC_INDEX] Phase=embedding BatchSize={N} Error={Error}",
+                "[SPEC_INDEX] Phase=embedding BatchSize={N} Error={Error} Action=fallback_per_chunk",
                 batch.Count, ex.Message);
-            return false;
+
+            var ok = 0;
+            var failed = 0;
+            for (var i = 0; i < batch.Count; i++)
+            {
+                try
+                {
+                    var single = await EmbeddingClient.GetEmbeddingsAsync(
+                        _http, _credential, _aoaiEndpoint, EmbeddingDeployment,
+                        new List<string> { inputs[i] }, _log);
+                    if (single.Count > 0)
+                    {
+                        batch[i]["page_chunk_vector"] = single[0];
+                        ok++;
+                    }
+                    else
+                    {
+                        failed++;
+                    }
+                }
+                catch (Exception perChunkEx)
+                {
+                    var id = batch[i].TryGetValue("id", out var v) ? v?.ToString() : "<unknown>";
+                    var section = batch[i].TryGetValue("section_path", out var sp) ? sp?.ToString() : "";
+                    var len = inputs[i].Length;
+                    _log.LogWarning(
+                        "[SPEC_INDEX] Phase=embedding_chunk_skipped Id={Id} Section={Section} Chars={Len} Error={Error}",
+                        id, section, len, perChunkEx.Message);
+                    failed++;
+                }
+            }
+            return (ok, failed);
         }
+    }
+
+    static string TruncateForEmbedding(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return s;
+        return s.Length > MaxEmbeddingChars ? s[..MaxEmbeddingChars] : s;
     }
 
     async Task<int> UploadBatchAsync(List<SearchDocument> batch)
