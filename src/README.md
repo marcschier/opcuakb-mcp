@@ -8,8 +8,8 @@ All projects target .NET 10 with nullable enabled and implicit usings.
 |---------|------|-------------|
 | [`OpcUaKb.Pipeline`](OpcUaKb.Pipeline/) | Console (Container Apps Job) | Combined crawl + index + NodeSet parse + CloudLib pipeline |
 | [`OpcUaKb.McpServer`](OpcUaKb.McpServer/) | Web (Container App) | MCP server with 11 tools — search, RAG Q&A, compliance, modelling (HTTP/SSE + stdio) |
-| [`OpcUaKb.Agent`](OpcUaKb.Agent/) | Web (Container App) | Bot Framework / Microsoft 365 Agents SDK custom engine agent for Teams + M365 Copilot |
-| [`OpcUaKb.Core`](OpcUaKb.Core/) | Library | Shared `KbService` (KB retrieve + GPT-4o synthesis) used by McpServer + Agent |
+| [`OpcUaKb.HostedAgent`](OpcUaKb.HostedAgent/) | Web (Foundry Hosted Agent) | Microsoft Agent Framework agent using the Responses protocol; consumes a Foundry Toolbox that wraps `OpcUaKb.McpServer`. Replaces the legacy Bot Framework agent. |
+| [`OpcUaKb.Core`](OpcUaKb.Core/) | Library | Shared `KbService` (KB retrieve + GPT-4o synthesis) and tool implementations used by McpServer |
 | [`OpcUaKb.Setup`](OpcUaKb.Setup/) | Console | Creates Web Knowledge Source, Knowledge Base, verifies MCP endpoint |
 | [`OpcUaKb.Crawler`](OpcUaKb.Crawler/) | Console | Standalone BFS web crawler for `*.opcfoundation.org` |
 | [`OpcUaKb.Indexer`](OpcUaKb.Indexer/) | Console | Standalone HTML chunker + embedder + search indexer |
@@ -35,8 +35,8 @@ There are no unit tests — `OpcUaKb.Test` is a console app requiring live Azure
 | `Azure.AI.OpenAI` | 2.9.0-beta.1 | Pipeline, Indexer |
 | `Azure.Identity` | 1.14.2 | Core (DefaultAzureCredential for AOAI) |
 | `ModelContextProtocol.AspNetCore` | 1.2.0 | McpServer |
-| `Microsoft.Agents.Hosting.AspNetCore` | 1.2.41 | Agent (Bot Framework hosting) |
-| `Microsoft.Agents.Authentication.Msal` | 1.2.41 | Agent (Entra ID auth) |
+| `Microsoft.Agents.AI.Foundry.Hosting` | 1.3.0-preview.260423.1 | HostedAgent (Agent Framework + Responses) |
+| `Azure.AI.Projects` | 2.1.0-beta.1 | HostedAgent (Toolbox + project client) |
 
 ## Conventions
 
@@ -133,50 +133,47 @@ Tools are implemented as static classes with `[McpServerToolType]` and `[McpServ
 | `SearchService` | Shared Azure AI Search client for structured queries |
 | `KbService` | KB retrieve API + GPT-4o chat completion for RAG. Lives in `OpcUaKb.Core`, shared with Agent. |
 
-## Custom Engine Agent
+## Foundry Hosted Agent
 
-The Agent (`OpcUaKb.Agent`) is a Bot Framework / Microsoft 365 Agents SDK custom engine agent that exposes the OPC UA Knowledge Base as a conversational bot in Microsoft Teams and Microsoft 365 Copilot. It reuses `KbService` from `OpcUaKb.Core` for the RAG pipeline.
+The Hosted Agent (`OpcUaKb.HostedAgent`) is a Foundry Hosted Agent using the **Responses protocol** and **Microsoft Agent Framework**. It exposes the OPC UA Knowledge Base as a conversational bot in Microsoft Teams and Microsoft 365 Copilot via Foundry's Activity-bridge.
 
 ### Architecture
 
 ```
-User in Teams/M365 Copilot → Azure Bot Service (JWT signing)
-   → POST /api/messages → OpcUaKb.Agent (Container App)
-       → KbService.AskAsync (KB retrieve + GPT-4o)
-       → Reply Activity
+User in Teams/M365 Copilot → Foundry Agent Application (Activity bridge)
+   → POST /responses → OpcUaKb.HostedAgent (Foundry-managed container)
+       → projectClient.AsAIAgent(model, instructions, tools)
+       → Foundry Responses API runs the tool loop server-side
+           → Foundry Toolbox "opcua-kb-tools" (MCP-compatible endpoint)
+               → OpcUaKb.McpServer (Container App, hosts the 11 tools)
+                   → Azure AI Search
 ```
+
+The hosted agent itself is ~60 lines of code — the entire tool-using loop is handled by the Foundry Responses API. No manual chat completions, no manual history hydration, no manual tool dispatch.
 
 ### Environment Variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `SEARCH_ENDPOINT` | ✓ | | Azure AI Search endpoint |
-| `SEARCH_API_KEY` | ✓ | | Azure AI Search admin key |
-| `AOAI_ENDPOINT` | ✓ | | Azure OpenAI / Foundry endpoint |
-| `AOAI_API_KEY` | | | AOAI key auth (falls back to MI) |
-| `KB_NAME` | | `opcua-kb` | Knowledge base name |
-| `BOT_ID` | | (anonymous) | Entra app appId for Bot Framework auth |
-| `BOT_PASSWORD` | | | Entra app client secret |
-| `PORT` | | `3978` | HTTP listen port |
+| `FOUNDRY_PROJECT_ENDPOINT` | ✓ | | Foundry project endpoint (auto-injected in hosted containers) |
+| `AZURE_AI_MODEL_DEPLOYMENT_NAME` | ✓ | | Model deployment name (e.g. `gpt-4o`) |
+| `TOOLBOX_NAME` | ✓ | `opcua-kb-tools` | Foundry Toolbox to load tools from |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | | | Auto-injected in hosted containers; enables tracing |
 
 ### Local Testing
 
 ```bash
-# Run the agent locally (anonymous mode — no BOT_ID needed)
-SEARCH_API_KEY="..." AOAI_API_KEY="..." \
-  AOAI_ENDPOINT="https://<prefix>-foundry.openai.azure.com" \
-  dotnet run --project src/OpcUaKb.Agent
-
-# In another terminal, run the Microsoft 365 Agents Playground
-npm install -g @microsoft/teams-app-test-tool
-teamsapptester
+cd src/OpcUaKb.HostedAgent
+azd auth login
+azd ai agent run                                   # runs locally on port 8088
+azd ai agent invoke --local "What is Part 9?"     # sends a test query
 ```
 
-The Playground opens a browser-based chat UI connected to your local agent on port 3978.
+The agent uses `DefaultAzureCredential` so a fresh `az login` (or `azd auth login`) is sufficient.
 
 ### Deployment
 
-Use `scripts/install-agent.ps1` (or `.sh`) — it creates the Entra app, deploys Bicep with the bot params, builds the image via ACR, and packages the Teams manifest. See [`scripts/README.md`](../scripts/README.md).
+Use `scripts/install-toolbox-and-agent.ps1` — it provisions the Toolbox (declared in `agent.manifest.yaml`), builds the container in ACR, deploys via `azd deploy`, optionally publishes as an Agent Application, and binds to Teams via the Activity bridge. See [`scripts/README.md`](../scripts/README.md).
 
 ## Search Index Schema
 

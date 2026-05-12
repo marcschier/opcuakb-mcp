@@ -12,8 +12,9 @@ dotnet run --project src/OpcUaKb.Pipeline
 # Run the custom MCP server (requires SEARCH_ENDPOINT and SEARCH_API_KEY)
 dotnet run --project src/OpcUaKb.McpServer
 
-# Run the chatbot (requires SEARCH_API_KEY and AOAI_API_KEY)
-dotnet run --project src/OpcUaKb.Chat
+# Run the hosted agent locally (requires Azure CLI login + an existing Foundry Toolbox)
+# See src/OpcUaKb.HostedAgent/README.md and scripts/install-toolbox-and-agent.ps1.
+azd ai agent run --cwd src/OpcUaKb.HostedAgent
 
 # Validate Bicep infrastructure
 az bicep build --file infra/main.bicep
@@ -26,10 +27,11 @@ There are no unit tests — `OpcUaKb.Test` is a console app requiring live Azure
 
 ## Architecture
 
-- **Single solution** (`OpcUaKnowledgeBase.slnx`) with 7 projects under `src/`
+- **Single solution** (`OpcUaKnowledgeBase.slnx`) with 8 projects under `src/`
 - **Pipeline** (`OpcUaKb.Pipeline`): Top-level statements, sealed classes, no explicit namespaces. Three phases: crawl → index → nodeset. Runs as Azure Container Apps Job on a weekly cron.
-- **MCP Server** (`OpcUaKb.McpServer`): Custom MCP server with 5 tools (search_nodes, get_type_hierarchy, get_spec_summary, search_docs, count_nodes). Uses `ModelContextProtocol` SDK with stdio transport.
-- **Infrastructure**: `infra/main.bicep` (all Azure resources) + `infra/deploy.sh` (end-to-end deployment script using `az rest` for preview APIs)
+- **MCP Server** (`OpcUaKb.McpServer`): Custom MCP server with 11 tools (search_nodes, get_type_hierarchy, get_spec_summary, search_docs, search_docs_rag, count_nodes, list_specs, compare_versions, suggest_model, check_compliance, validate_nodeset). Uses `ModelContextProtocol` SDK with HTTP SSE (default) + stdio (`--stdio`) transports.
+- **Hosted Agent** (`OpcUaKb.HostedAgent`): Foundry Hosted Agent using Microsoft Agent Framework + Responses protocol. Reads tools from a Foundry Toolbox that wraps `OpcUaKb.McpServer`. Deployed via `azd deploy` (after `azd ai agent init` + `azd provision`); replaces the legacy Bot Framework custom engine agent.
+- **Infrastructure**: `infra/main.bicep` (Azure resources) + `infra/deploy.sh`. The Foundry-side agent + toolbox are NOT in Bicep; they're provisioned by `azd provision` / `azd deploy` from `src/OpcUaKb.HostedAgent/agent.manifest.yaml` (after `azd ai agent init` scaffolds `azure.yaml`).
 - **Index**: Azure AI Search `opcua-content-index` with `content_type` field distinguishing `text`, `table`, `diagram`, `nodeset`, `nodeset_summary`, and `nodeset_hierarchy` docs
 - **Structured fields**: NodeSet docs have `node_class`, `modelling_rule`, `browse_name`, `parent_type`, and `data_type` as filterable fields for structured queries
 - **Summary docs**: Pre-computed per-spec and cross-spec statistics (content_type=`nodeset_summary`) enable the KB to answer aggregation questions
@@ -118,10 +120,13 @@ https://{search}.search.windows.net/knowledgebases/{kb}/mcp?api-version=2025-11-
 ## Conventions
 
 - .NET 10, nullable enabled, implicit usings
-- Top-level statements for all console apps (Pipeline, Chat, Setup, Test, McpServer)
+- Top-level statements for all console apps (Pipeline, Setup, Test, McpServer, HostedAgent)
 - Sealed classes preferred
 - No explicit namespaces in Pipeline project
-- NuGet: `Azure.Search.Documents` 11.8.0-beta.1, `Azure.AI.OpenAI` 2.9.0-beta.1, `ModelContextProtocol` 1.2.0
+- NuGet: `Azure.Search.Documents` 11.8.0-beta.1, `Azure.AI.OpenAI` 2.9.0-beta.1, `ModelContextProtocol` 1.2.0, `Microsoft.Agents.AI.Foundry.Hosting` 1.3.0-preview.260423.1 (HostedAgent only), `Azure.AI.Projects` 2.1.0-beta.1 (HostedAgent only)
 - Structured logging: `[PHASE] Key=Value` format for KQL dashboard queries
 - Pipeline status tracked in `_pipeline-status.json` blob
 - MCP server uses static tool classes with `[McpServerToolType]` / `[McpServerTool]` attributes
+- HostedAgent uses Agent Framework: `projectClient.AsAIAgent(model, instructions, tools)` with tools fetched via `projectClient.GetToolboxToolsAsync(toolboxName)` — Foundry executes tool calls server-side, no manual loop
+- Foundry Toolbox is declared as a `kind: toolbox` resource in `agent.manifest.yaml` and auto-provisioned by `azd provision`
+- Tool implementations are shared between `OpcUaKb.McpServer` (the actual host) and `OpcUaKb.Core` (definitions). The Toolbox proxies to the MCP server on Container Apps.

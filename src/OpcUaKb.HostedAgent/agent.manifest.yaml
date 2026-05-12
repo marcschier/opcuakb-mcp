@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/microsoft/AgentSchema/refs/heads/main/schemas/v1.0/AgentManifest.yaml
+name: opcua-kb-agent
+displayName: "OPC UA Expert"
+description: >
+  Tool-using agent that answers questions about OPC UA specifications, NodeSets,
+  type hierarchies, compliance, and companion specs. Backed by the OPC UA
+  Knowledge Base via a Foundry Toolbox that wraps OpcUaKb.McpServer.
+metadata:
+  tags:
+    - OPC UA
+    - Knowledge Base
+    - Responses Protocol
+    - Agent Framework
+    - Toolbox
+    - MCP
+    - .NET
+template:
+  name: opcua-kb-agent
+  kind: hosted
+  protocols:
+    - protocol: responses
+      version: 1.0.0
+  environment_variables:
+    # FOUNDRY_PROJECT_ENDPOINT and APPLICATIONINSIGHTS_CONNECTION_STRING are
+    # auto-injected by the platform (hosted) and translated by azd (local) —
+    # do NOT declare them here.
+    - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+      value: "{{AZURE_AI_MODEL_DEPLOYMENT_NAME}}"
+    - name: TOOLBOX_NAME
+      value: "opcua-kb-tools"
+resources:
+  - kind: model
+    id: gpt-4o
+    name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+  - kind: toolbox
+    name: opcua-kb-tools
+    tools:
+      - type: mcp
+        server_label: opcua-kb-mcp
+        server_url: "{{MCP_SERVER_URL}}"

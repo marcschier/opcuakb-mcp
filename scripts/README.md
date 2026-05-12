@@ -36,36 +36,49 @@ SEARCH_API_KEY=<your-search-api-key> ./scripts/install-mcp.sh local
 
 ## Agent Deployment Scripts
 
-### `install-agent.ps1` (PowerShell) / `install-agent.sh` (Bash)
+### `install-toolbox-and-agent.ps1` (PowerShell)
 
-End-to-end automation for deploying the OPC UA Custom Engine Agent (Microsoft 365 Agents SDK / Bot Framework) to Azure and Microsoft 365.
+End-to-end automation for deploying the OPC UA Hosted Agent to **Azure AI Foundry** as a managed Hosted Agent using the **Responses protocol** and a **Foundry Toolbox** that wraps the MCP server. This replaces the legacy Bot Framework / Microsoft 365 Agents SDK deployment.
 
 ```powershell
-.\scripts\install-agent.ps1 [-ResourceGroup rg-opcua-kb] [-Prefix opcua-kb] [-Location eastus] [-SkipImageBuild]
-```
-
-```bash
-./scripts/install-agent.sh [-g rg-opcua-kb] [-p opcua-kb] [-l eastus] [--skip-image-build]
+.\scripts\install-toolbox-and-agent.ps1 `
+    [-ResourceGroup rg-opcua-kb] `
+    [-FoundryAccountName opcua-kb-foundry] `
+    [-FoundryProjectName opcua-kb-project] `
+    [-McpServerUrl https://opcua-kb-mcp-server.<env>.azurecontainerapps.io/] `
+    [-Location eastus] `
+    [-AgentDir ..\src\OpcUaKb.HostedAgent] `
+    [-SkipAzdInit] [-SkipProvision] `
+    [-PublishAsApp] [-BindToTeams]
 ```
 
 **What it does (idempotent — safe to re-run):**
 
-1. Creates or finds Microsoft Entra ID multi-tenant app registration (`OPC UA KB Agent`) with the correct redirect URI (`https://token.botframework.com/.auth/web/redirect`)
-2. Generates a 2-year client secret (appended — doesn't invalidate prior secrets in flight)
-3. Sets the `identifierUris` to `api://botid-{appId}` (required by Teams manifest)
-4. Builds the agent Docker image via ACR (`Dockerfile.agent`)
-5. Deploys the Bicep template with `botAppId` and `botAppPassword` parameters
-6. Updates the Container App revision to pick up the new image
-7. Sets the Bot Service messaging endpoint to the agent's FQDN
-8. Generates the Teams app package (substitutes `${{BOT_ID}}` and `${{TEAMS_APP_ID}}`, copies icons, zips)
+1. Pre-flight: verifies `az`, `azd`, `azd ai agents` extension, agent dir + manifest, resolves MCP server URL.
+2. Auth: `az account set`, soft RBAC check (Azure AI Project Manager on the Foundry project), `azd auth login` for the Microsoft tenant.
+3. `azd ai agent init`: writes `azure.yaml` if missing.
+4. `azd provision`: creates the Foundry Toolbox declared in `agent.manifest.yaml` (the `kind: toolbox` resource) plus the agent identity + RBAC.
+5. `azd deploy`: builds the container in ACR remotely and creates a new agent version. Captures the agent endpoint.
+6. **Optional** `-PublishAsApp`: wraps the agent version in a Foundry Agent Application with a stable endpoint and dedicated Entra agent identity.
+7. **Optional** `-BindToTeams`: binds the Agent Application to a Teams channel via Foundry's Activity-bridge.
+8. Smoke test: invokes the agent with `azd ai agent invoke --verbose` and looks for tool-call traces.
 
-**Output:** `agents/m365-agent/appPackage/build/opcua-kb-agent.zip` ready to upload via Teams Admin Center.
+**Architecture (new):**
+```
+Teams / Web Chat → Foundry Agent Application (Activity bridge)
+  → OpcUaKb.HostedAgent (Responses protocol container)
+    → Foundry Responses API (built-in tool loop)
+      → Foundry Toolbox "opcua-kb-tools"
+        → OpcUaKb.McpServer (Container App, still hosts the 11 tools)
+          → Azure AI Search
+```
 
 **Prerequisites:**
-- `az` CLI (logged in)
-- An existing `rg-opcua-kb` resource group (the script doesn't create infrastructure from scratch — run `infra/deploy.sh` first to create the base resources, then `install-agent.ps1` to add the agent)
+- `az` CLI (logged in to the right tenant)
+- `azd` CLI v1.24.0+ with the `azure.ai.agents` extension
+- An existing `rg-opcua-kb` resource group with `opcua-kb-foundry` AIServices account, MCP server Container App, and a `gpt-4o` model deployment (run `infra/deploy.sh` first)
 
-**Note:** The script uses **Python-direct invocation** of the Azure CLI on Windows to avoid `cmd.exe` truncating client secrets containing special characters like `&`.
+**Note:** The script uses **Python-direct invocation** of the Azure CLI on Windows to avoid `cmd.exe` truncating secrets containing special characters like `&` (carried over from `install-agent.ps1`).
 
 ## Manual Configuration
 
