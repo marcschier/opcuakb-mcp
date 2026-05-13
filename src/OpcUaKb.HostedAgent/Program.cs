@@ -1,22 +1,28 @@
 // ═══════════════════════════════════════════════════════════════════════
-// OPC UA Expert — Foundry Hosted Agent (Agent Framework + Toolbox)
+// OPC UA Expert — Foundry Hosted Agent (Agent Framework + direct MCP client)
 //
-// Loads a Foundry Toolbox and passes its tools to the agent as SERVER-SIDE
-// tools. The Foundry platform handles tool discovery and invocation through
-// the Responses API — this process does not connect to the toolbox MCP
-// proxy or invoke tools locally.
+// Connects directly to OpcUaKb.McpServer over SSE so each of the 11 MCP
+// tools (search_docs, list_specs, get_spec_summary, etc.) is exposed as a
+// distinct AIFunction that GPT-4o can call by name. The Agent Framework
+// hosting library runs the tool-call loop locally in this container.
+//
+// We do NOT use the Foundry Toolbox here. GetToolboxToolsAsync wraps the
+// whole MCP server into a single opaque "McpTool" with no schema visible
+// to the model, which prevents GPT-4o from picking specific tools.
 //
 // Required environment variables:
 //   FOUNDRY_PROJECT_ENDPOINT       — Foundry project endpoint (auto-injected in hosted containers)
 //   AZURE_AI_MODEL_DEPLOYMENT_NAME — Model deployment name (declared in agent.manifest.yaml)
-//   TOOLBOX_NAME                   — Name of the Foundry Toolbox to load
+//   MCP_SERVER_URL                 — Base URL of the OpcUaKb.McpServer (Container Apps endpoint)
 // ═══════════════════════════════════════════════════════════════════════
-#pragma warning disable OPENAI001 // GetToolboxToolsAsync is experimental
+#pragma warning disable OPENAI001 // some Agent Framework hooks are experimental
 using Azure.AI.Projects;
 using Azure.Identity;
 using DotNetEnv;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Foundry.Hosting;
+using Microsoft.Extensions.AI;
+using ModelContextProtocol.Client;
 
 // Load .env file if present (for local development)
 Env.TraversePath().Load();
@@ -27,8 +33,8 @@ var projectEndpoint = new Uri(Environment.GetEnvironmentVariable("FOUNDRY_PROJEC
 var deployment = Environment.GetEnvironmentVariable("AZURE_AI_MODEL_DEPLOYMENT_NAME")
     ?? throw new InvalidOperationException("AZURE_AI_MODEL_DEPLOYMENT_NAME environment variable is not set.");
 
-var toolboxName = Environment.GetEnvironmentVariable("TOOLBOX_NAME")
-    ?? throw new InvalidOperationException("TOOLBOX_NAME environment variable is not set.");
+var mcpServerUrl = Environment.GetEnvironmentVariable("MCP_SERVER_URL")
+    ?? throw new InvalidOperationException("MCP_SERVER_URL environment variable is not set.");
 
 const string Instructions =
     "You are OPC UA Expert. Use the available tools to answer questions about " +
@@ -38,19 +44,28 @@ const string Instructions =
     "Use search_docs or search_docs_rag for free-form spec text questions. " +
     "Cite specification part numbers and sections. Be technically precise.";
 
-// Fetch the toolbox's tools from Foundry. Omitting the version resolves the toolbox's
-// current default version. The returned AITools are passed directly to the agent as
-// server-side tools — Foundry will execute them on the agent's behalf.
+// Build an MCP client against the OpcUaKb.McpServer HTTP/SSE endpoint. Each tool the
+// server advertises becomes its own McpClientTool (which is an AIFunction) so the
+// model can pick by name.
+var transport = new HttpClientTransport(new HttpClientTransportOptions
+{
+    Endpoint = new Uri(mcpServerUrl),
+    Name = "opcua-kb-agent",
+});
+var mcpClient = await McpClient.CreateAsync(transport);
+var mcpTools = await mcpClient.ListToolsAsync();
+Console.WriteLine($"[STARTUP] Loaded {mcpTools.Count} tool(s) from MCP server '{mcpServerUrl}': " +
+    string.Join(", ", mcpTools.Select(t => t.Name)));
+
 var projectClient = new AIProjectClient(projectEndpoint, new DefaultAzureCredential());
-var tools = await projectClient.GetToolboxToolsAsync(toolboxName);
 
 AIAgent agent = projectClient
     .AsAIAgent(
         model: deployment,
         instructions: Instructions,
         name: "opcua-kb-agent",
-        description: "OPC UA Expert — knowledge base agent backed by Azure AI Search and an MCP toolbox.",
-        tools: [.. tools]);
+        description: "OPC UA Expert — knowledge base agent backed by Azure AI Search via the OpcUaKb MCP server.",
+        tools: [.. mcpTools]);
 
 var builder = AgentHost.CreateBuilder(args);
 builder.Services.AddFoundryResponses(agent);

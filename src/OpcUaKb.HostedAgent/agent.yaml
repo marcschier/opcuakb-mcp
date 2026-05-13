@@ -10,5 +10,5 @@ resources:
 environment_variables:
   - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
     value: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
-  - name: TOOLBOX_NAME
-    value: ${TOOLBOX_NAME}
+  - name: MCP_SERVER_URL
+    value: ${MCP_SERVER_URL}

@@ -30,7 +30,7 @@ services:
                 - name: opcua-kb-tools
                   tools:
                     - server_label: opcua-kb-mcp
-                      server_url: https://opcua-kb-mcp-server.salmonfield-436bb4c2.eastus.azurecontainerapps.io/
+                      server_url: https://opcua-kb-sc-mcp-server.braveplant-56ae9d9d.swedencentral.azurecontainerapps.io/
                       type: mcp
 infra:
     provider: bicep
