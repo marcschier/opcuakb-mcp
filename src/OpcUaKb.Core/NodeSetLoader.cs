@@ -302,26 +302,6 @@ sealed public class NodeSetLoader
         }
         return false;
     }
-
-    /// <summary>
-    /// Reads up to <paramref name="maxBytes"/> from <paramref name="input"/>
-    /// into a new <see cref="MemoryStream"/>, computes the hex SHA-256, and
-    /// returns the rewound buffer. Used by the upload endpoint to produce
-    /// the content-addressed blob name.
-    /// </summary>
-    public static async Task<(string Sha256, MemoryStream Buffered)> HashAndBufferAsync(
-        Stream input, long maxBytes, CancellationToken ct = default)
-    {
-        using var bounded = new SizeBoundedStream(input, maxBytes, leaveInnerOpen: true);
-        var buf = new MemoryStream();
-        await bounded.CopyToAsync(buf, ct);
-        buf.Position = 0;
-
-        var hash = await SHA256.HashDataAsync(buf, ct);
-        buf.Position = 0;
-
-        return (Convert.ToHexStringLower(hash), buf);
-    }
 }
 
 /// <summary>
@@ -349,6 +329,8 @@ public sealed class NodeSetLoadException(string message) : Exception(message);
 /// <summary>
 /// Wraps a stream and aborts the read past <c>maxBytes</c>. When
 /// <paramref name="leaveInnerOpen"/> is true the inner stream isn't disposed.
+/// Exposes <see cref="BytesRead"/> so callers can report exact size after
+/// a streaming copy without buffering.
 /// </summary>
 public sealed class SizeBoundedStream : Stream
 {
@@ -364,6 +346,9 @@ public sealed class SizeBoundedStream : Stream
         _leaveInnerOpen = leaveInnerOpen;
     }
 
+    /// <summary>Bytes successfully delivered to the caller so far.</summary>
+    public long BytesRead => _read;
+
     public override bool CanRead => _inner.CanRead;
     public override bool CanSeek => false;
     public override bool CanWrite => false;
@@ -376,12 +361,10 @@ public sealed class SizeBoundedStream : Stream
 
     public override int Read(byte[] buffer, int offset, int count)
     {
-        EnforceLimit();
-        var allowed = (int)Math.Min(count, _max - _read);
-        var read = _inner.Read(buffer, offset, Math.Min(allowed + 1, count));
-        _read += read;
-        EnforceLimit();
-        return read;
+        // Same async-bridge rationale as HashingStream — Kestrel forbids
+        // sync IO on the request body, but Azure SDK calls Read sync from
+        // its internal buffering path.
+        return ReadAsync(buffer.AsMemory(offset, count), default).AsTask().GetAwaiter().GetResult();
     }
 
     public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)

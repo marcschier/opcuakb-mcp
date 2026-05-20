@@ -28,16 +28,32 @@ param cloudLibUsername string = ''
 @secure()
 param cloudLibPassword string = ''
 
+@description('When true, set storage publicNetworkAccess=Disabled and require VNet/private-endpoint access only. Must already have the v2 Container Apps environment + private endpoint provisioned and validated before flipping this on, otherwise the v1 apps lose all storage access.')
+param lockdownStorage bool = false
+
 // ── Derived names ────────────────────────────────────────────────────
 var searchName = '${prefix}-search'
 var foundryName = '${prefix}-foundry'
 var storageName = take(replace('${prefix}storage', '-', ''), 24)
 var docaiName = '${prefix}-docai'
 var acrName = replace('${prefix}registry', '-', '')
-var envName = '${prefix}-env'
-var jobName = '${prefix}-pipeline-job'
+var envName = '${prefix}-env-v2'
+var jobName = '${prefix}-pipeline-job-v2'
+var mcpAppName = '${prefix}-mcp-server-v2'
 var logAnalyticsName = '${prefix}-logs'
 var workbookName = guid(resourceGroup().id, 'opcua-pipeline-dashboard')
+
+// ── VNet sizing for v2 (workload-profile env + private endpoint) ─────
+// 10.20.0.0/24 = 256 IPs total:
+//   apps-subnet  10.20.0.0/26     (64 IPs)  ── Microsoft.App workload-profile env
+//   pe-subnet    10.20.0.64/28    (16 IPs)  ── private endpoint NICs
+//   spare        10.20.0.80+               ── reserved for future workloads
+var vnetName = '${prefix}-vnet'
+var vnetCidr = '10.20.0.0/24'
+var appsSubnetName = 'apps-subnet'
+var appsSubnetCidr = '10.20.0.0/26'
+var peSubnetName = 'pe-subnet'
+var peSubnetCidr = '10.20.0.64/28'
 
 var containerImage = empty(pipelineImage) ? 'mcr.microsoft.com/dotnet/runtime:9.0' : pipelineImage
 
@@ -141,12 +157,128 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     supportsHttpsTrafficOnly: true
     allowSharedKeyAccess: false
     defaultToOAuthAuthentication: true
-    // Public network access is enabled so the pipeline job and MCP server
-    // (which run in the Container Apps Environment without VNet integration)
-    // can reach the storage account via Entra-only auth. allowSharedKeyAccess
-    // and allowBlobPublicAccess remain false — every request must be a valid
-    // Entra token from a principal that holds Storage Blob Data Contributor.
-    publicNetworkAccess: 'Enabled'
+    // Two-phase rollout: while lockdownStorage=false we keep both v1 and v2
+    // apps able to reach the storage account; the v2 apps already use the
+    // private endpoint via private DNS, but the v1 apps still rely on
+    // public ingress until cutover. When lockdownStorage=true, public
+    // access is fully off — only private-endpoint traffic is accepted, and
+    // every request still has to be a valid Entra token from a principal
+    // holding Storage Blob Data Contributor.
+    publicNetworkAccess: lockdownStorage ? 'Disabled' : 'Enabled'
+    networkAcls: lockdownStorage ? {
+      defaultAction: 'Deny'
+      bypass: 'AzureServices'
+      ipRules: []
+      virtualNetworkRules: []
+    } : {
+      defaultAction: 'Allow'
+      bypass: 'AzureServices'
+      ipRules: []
+      virtualNetworkRules: []
+    }
+  }
+}
+
+// ── 3a. VNet + subnets for the v2 workload-profile environment ──────
+resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = {
+  name: vnetName
+  location: location
+  properties: {
+    addressSpace: {
+      addressPrefixes: [vnetCidr]
+    }
+    subnets: [
+      {
+        name: appsSubnetName
+        properties: {
+          addressPrefix: appsSubnetCidr
+          // Delegation to the Container Apps service. Required for
+          // workload-profile env vnetConfiguration.
+          delegations: [
+            {
+              name: 'Microsoft.App.environments'
+              properties: {
+                serviceName: 'Microsoft.App/environments'
+              }
+            }
+          ]
+        }
+      }
+      {
+        name: peSubnetName
+        properties: {
+          addressPrefix: peSubnetCidr
+          // Private endpoint NICs need this disabled.
+          privateEndpointNetworkPolicies: 'Disabled'
+        }
+      }
+    ]
+  }
+}
+
+resource appsSubnet 'Microsoft.Network/virtualNetworks/subnets@2023-11-01' existing = {
+  parent: vnet
+  name: appsSubnetName
+}
+
+resource peSubnet 'Microsoft.Network/virtualNetworks/subnets@2023-11-01' existing = {
+  parent: vnet
+  name: peSubnetName
+}
+
+// ── 3b. Private DNS zone for blob endpoint ──────────────────────────
+resource blobPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
+  name: 'privatelink.blob.core.windows.net'
+  location: 'global'
+}
+
+resource blobPrivateDnsZoneLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
+  parent: blobPrivateDnsZone
+  name: '${vnetName}-link'
+  location: 'global'
+  properties: {
+    registrationEnabled: false
+    virtualNetwork: {
+      id: vnet.id
+    }
+  }
+}
+
+// ── 3c. Private endpoint for the storage blob service ───────────────
+resource storagePrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-11-01' = {
+  name: '${prefix}-storage-pe'
+  location: location
+  properties: {
+    subnet: {
+      id: peSubnet.id
+    }
+    privateLinkServiceConnections: [
+      {
+        name: 'blob'
+        properties: {
+          privateLinkServiceId: storageAccount.id
+          groupIds: ['blob']
+        }
+      }
+    ]
+  }
+}
+
+// Wires the private endpoint NIC's A record into the privatelink DNS zone
+// so any VNet client resolving opcuakbscstorage.blob.core.windows.net gets
+// the private IP, not the public one.
+resource storagePrivateEndpointDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-11-01' = {
+  parent: storagePrivateEndpoint
+  name: 'blob-dns-zone-group'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'blob'
+        properties: {
+          privateDnsZoneId: blobPrivateDnsZone.id
+        }
+      }
+    ]
   }
 }
 
@@ -199,6 +331,20 @@ resource containerEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
         sharedKey: logAnalytics.listKeys().primarySharedKey
       }
     }
+    workloadProfiles: [
+      {
+        name: 'Consumption'
+        workloadProfileType: 'Consumption'
+      }
+    ]
+    vnetConfiguration: {
+      infrastructureSubnetId: appsSubnet.id
+      // External ingress: MCP server still needs a public FQDN so the
+      // Hosted Agent in westus3 can reach it cross-region. Outbound to
+      // the storage account flows through the private endpoint via the
+      // VNet's privatelink DNS zone, never the public Internet.
+      internal: false
+    }
   }
 }
 
@@ -211,6 +357,7 @@ resource pipelineJob 'Microsoft.App/jobs@2024-03-01' = {
   }
   properties: {
     environmentId: containerEnv.id
+    workloadProfileName: 'Consumption'
     configuration: {
       triggerType: 'Schedule'
       scheduleTriggerConfig: {
@@ -288,8 +435,7 @@ resource pipelineJob 'Microsoft.App/jobs@2024-03-01' = {
   }
 }
 
-// ── 8. MCP Server Container App ─────────────────────────────────────
-var mcpAppName = '${prefix}-mcp-server'
+// ── 8. MCP Server Container Apps ────────────────────────────────────
 var mcpImage = empty(pipelineImage) ? 'mcr.microsoft.com/dotnet/aspnet:10.0' : '${acr.properties.loginServer}/opcua-mcp-server:latest'
 
 resource mcpServer 'Microsoft.App/containerApps@2024-03-01' = {
@@ -300,6 +446,7 @@ resource mcpServer 'Microsoft.App/containerApps@2024-03-01' = {
   }
   properties: {
     environmentId: containerEnv.id
+    workloadProfileName: 'Consumption'
     configuration: {
       activeRevisionsMode: 'Single'
       ingress: {
@@ -387,7 +534,16 @@ resource mcpServer 'Microsoft.App/containerApps@2024-03-01' = {
       }
     }
   }
+  // The mcpServer reads/writes to the storage account exclusively through
+  // the private endpoint (DNS resolved via blobPrivateDnsZone). If the PE
+  // + DNS zone group don't exist yet, the very first cold start would
+  // resolve to the public IP and then fail with 403 once lockdownStorage
+  // is on. Force ordering.
+  dependsOn: [
+    storagePrivateEndpointDnsGroup
+  ]
 }
+
 
 // ── 9. Role assignments — MIs → Foundry ─────────────────────────────
 // Cognitive Services OpenAI User (data-plane access to model deployments)
@@ -456,6 +612,7 @@ resource mcpServerStorageBlobContributor 'Microsoft.Authorization/roleAssignment
     roleDefinitionId: storageBlobDataContributorRole
   }
 }
+
 
 // Lifecycle policy — auto-delete user uploads after 1 day to keep the
 // privacy footprint minimal. Pipeline-written paths (nodesets/, html/,
@@ -527,3 +684,5 @@ output acrLoginServer string = acr.properties.loginServer
 output mcpEndpoint string = 'https://${search.name}.search.windows.net/knowledgebases/${prefix}-kb/mcp?api-version=2025-11-01-preview'
 
 output mcpServerEndpoint string = 'https://${mcpServer.properties.configuration.ingress.fqdn}'
+output vnetId string = vnet.id
+output storagePrivateEndpointId string = storagePrivateEndpoint.id

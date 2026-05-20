@@ -8,11 +8,14 @@ All Azure resources are defined in [`main.bicep`](main.bicep) and deployed via [
 |----------|-------------|---------|
 | AI Search (Standard) | `{prefix}-search` | Search index (`opcua-content-index-v2`) + knowledge base |
 | Azure AI Foundry | `{prefix}-foundry` | AIServices account + default project; GPT-4o (30 TPM) + text-embedding-3-large (120 TPM). MI auth. |
-| Blob Storage | `{prefix}storage` | Crawled content storage. **MI-only auth** (`allowSharedKeyAccess: false`) — pipeline + indexer use `DefaultAzureCredential`. |
+| Blob Storage | `{prefix}storage` | Crawled content storage. **MI-only auth** (`allowSharedKeyAccess: false`), **publicNetworkAccess: Disabled** with `networkAcls.defaultAction: Deny` — reachable only through the VNet's private endpoint. |
 | Container Registry | `{prefix}registry` | Pipeline + MCP server Docker images |
-| Container Apps Environment | `{prefix}-env` | Shared environment for job + app |
-| Container Apps Job | `{prefix}-pipeline-job` | Weekly crawl + index (cron: `0 2 * * 0`, 24h timeout). System MI + Cognitive Services OpenAI User role + Storage Blob Data Contributor on the storage account. |
-| Container App | `{prefix}-mcp-server` | MCP server with 11 tools + RAG (scale 0–2, HTTP auto-scale). System MI + Cognitive Services OpenAI User role. |
+| Container Apps Environment | `{prefix}-env-v2` | Workload-profile env (Consumption profile) with VNet integration via `apps-subnet`. |
+| VNet | `{prefix}-vnet` | `10.20.0.0/24`. `apps-subnet` /26 (delegated to `Microsoft.App/environments`), `pe-subnet` /28 (privateEndpointNetworkPolicies Disabled). |
+| Private DNS zone | `privatelink.blob.core.windows.net` | Linked to the VNet; resolves the storage account's blob endpoint to the PE private IP for any VNet client. |
+| Private endpoint | `{prefix}-storage-pe` | For storage `blob` group. Auto-approved (same subscription). |
+| Container Apps Job | `{prefix}-pipeline-job-v2` | Weekly crawl + index (cron: `0 2 * * 0`, 24h timeout). Runs in the VNet-integrated workload-profile env; writes to storage via private endpoint. System MI + Cognitive Services OpenAI User + Storage Blob Data Contributor. |
+| Container App | `{prefix}-mcp-server-v2` | MCP server with 11 tools + RAG. **Workload-profile env, VNet-integrated.** Reads/writes storage exclusively via private endpoint. System MI + Cognitive Services OpenAI User + Storage Blob Data Contributor. |
 | Log Analytics Workspace | `{prefix}-logs` | Pipeline and MCP server log collection |
 | Azure Monitor Workbook | — | Pipeline dashboard (crawl/index/error tracking) |
 

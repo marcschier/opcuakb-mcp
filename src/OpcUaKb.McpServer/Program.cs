@@ -1,4 +1,5 @@
 using System.Net;
+using System.Security.Cryptography;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Http;
@@ -10,6 +11,7 @@ using Azure;
 using Azure.Identity;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
+using Azure.Storage.Blobs.Specialized;
 using ModelContextProtocol.AspNetCore;
 using ModelContextProtocol.Server;
 
@@ -229,10 +231,18 @@ else
         await next();
     });
 
-    // POST /upload-nodeset — content-addressed NodeSet upload.
-    // Accepts raw XML body OR multipart/form-data with a `file` part.
-    // Returns { nodeset_ref, size_bytes, sha256 }. Blob lifecycle deletes
-    // these after 1 day (see infra/main.bicep storageLifecyclePolicy).
+    // POST /upload-nodeset — content-addressed NodeSet upload, fully streamed
+    // (no whole-payload memory buffering).
+    //
+    // Pipeline: req.Body → SizeBoundedStream → HashingStream(IncrementalHash)
+    //                    → BlobClient.UploadAsync(stream) staging blob.
+    //
+    // After upload completes, the SHA256 is finalized and we attempt to
+    // server-side copy the staging blob to the content-addressed final name
+    // (uploads/{sha256}.xml). If copy fails — e.g. behind a private endpoint
+    // where source authorization can be touchy — we gracefully fall back to
+    // returning the staging blob ref. Lifecycle policy cleans both paths
+    // (uploads/.staging/* and uploads/*) after 1 day either way.
     app.MapPost("/upload-nodeset", async (HttpRequest req, CancellationToken ct) =>
     {
         if (uploadContainer == null)
@@ -242,58 +252,126 @@ else
                 statusCode: 503);
         }
 
-        Stream? content = null;
+        Stream? input = null;
+        var stagingName = $"uploads/.staging/{Guid.NewGuid():N}.xml";
+        var stagingBlob = uploadContainer.GetBlobClient(stagingName);
         try
         {
-            content = await ExtractUploadStreamAsync(req, maxFetchBytes, ct);
-            if (content == null)
+            input = await ExtractUploadStreamAsync(req, ct);
+            if (input == null)
             {
                 return Results.Json(
                     new { error = "no_content", error_description = "Provide an XML body, or multipart/form-data with a 'file' part." },
                     statusCode: 400);
             }
 
-            var (sha256, buf) = await NodeSetLoader.HashAndBufferAsync(content, maxFetchBytes, ct);
-            using (buf)
+            using var incrementalHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            // Order: input → bounded → hashing tee. The SDK pulls from the
+            // hashing tee, which feeds every byte into IncrementalHash *and*
+            // forwards it to the SDK. No CryptoStream — its Dispose/FlushFinal
+            // semantics fight with Azure SDK's read-to-EOF pattern.
+            // leaveInnerOpen=true so disposing the wrapper doesn't cascade
+            // into closing req.Body (Kestrel manages that).
+            using var bounded = new SizeBoundedStream(input, maxFetchBytes, leaveInnerOpen: true);
+            using var tee = new HashingStream(bounded, incrementalHash, leaveInnerOpen: true);
+
+            // Stream the upload to staging. Azure SDK chunks into block
+            // uploads — no whole-payload memory materialization.
+            await stagingBlob.UploadAsync(tee, new BlobUploadOptions
             {
-                var path = $"uploads/{sha256}.xml";
-                var blob = uploadContainer.GetBlobClient(path);
-                await blob.UploadAsync(buf, new BlobUploadOptions
+                HttpHeaders = new BlobHttpHeaders { ContentType = "application/xml" },
+                TransferOptions = new Azure.Storage.StorageTransferOptions
                 {
-                    HttpHeaders = new BlobHttpHeaders { ContentType = "application/xml" },
-                }, ct);
+                    InitialTransferSize = 4 * 1024 * 1024,
+                    MaximumTransferSize = 4 * 1024 * 1024,
+                    MaximumConcurrency = 1, // sequential — preserves hash order
+                },
+            }, ct);
+
+            // Hash is now final.
+            var sha256 = Convert.ToHexStringLower(incrementalHash.GetHashAndReset());
+            var size = bounded.BytesRead;
+
+            // Attempt content-addressed promotion.
+            var finalName = $"uploads/{sha256}.xml";
+            var finalBlob = uploadContainer.GetBlobClient(finalName);
+            var finalRef = $"blob:{finalName}";
+
+            try
+            {
+                // If the final already exists, dedup hit — skip the copy.
+                var exists = await finalBlob.ExistsAsync(ct);
+                if (!exists.Value)
+                {
+                    var copyOp = await finalBlob.SyncCopyFromUriAsync(stagingBlob.Uri, cancellationToken: ct);
+                    if (copyOp.Value.CopyStatus != CopyStatus.Success)
+                    {
+                        // Server-side copy didn't complete synchronously (rare for
+                        // intra-account copies). Fall back to returning the staging
+                        // ref — still valid, lifecycle policy reaps it.
+                        finalRef = $"blob:{stagingName}";
+                        return Results.Json(new
+                        {
+                            nodeset_ref = finalRef,
+                            size_bytes = size,
+                            sha256,
+                            dedup = false,
+                            note = "Server-side copy did not complete; returning staging ref.",
+                        });
+                    }
+                }
+
+                // Successful copy or dedup hit — drop staging.
+                await stagingBlob.DeleteIfExistsAsync(cancellationToken: ct);
 
                 return Results.Json(new
                 {
-                    nodeset_ref = $"blob:{path}",
-                    size_bytes = buf.Length,
+                    nodeset_ref = finalRef,
+                    size_bytes = size,
                     sha256,
+                    dedup = exists.Value,
+                });
+            }
+            catch (RequestFailedException copyEx)
+            {
+                // Copy failed — return staging ref as fallback. Lifecycle
+                // policy will reap both paths after 1 day either way.
+                return Results.Json(new
+                {
+                    nodeset_ref = $"blob:{stagingName}",
+                    size_bytes = size,
+                    sha256,
+                    dedup = false,
+                    note = $"Content-addressed copy failed ({copyEx.Status} {copyEx.ErrorCode}); returning staging ref.",
                 });
             }
         }
         catch (NodeSetLoadException ex)
         {
+            // Try to clean up the partial staging blob.
+            try { await stagingBlob.DeleteIfExistsAsync(cancellationToken: ct); } catch { /* best-effort */ }
             return Results.Json(
                 new { error = "upload_failed", error_description = ex.Message },
                 statusCode: 400);
         }
         catch (RequestFailedException ex)
         {
+            try { await stagingBlob.DeleteIfExistsAsync(cancellationToken: ct); } catch { /* best-effort */ }
             return Results.Json(
                 new { error = "storage_failure", error_description = $"{ex.Status} {ex.ErrorCode}" },
                 statusCode: 502);
         }
         finally
         {
-            if (content != null) await content.DisposeAsync();
+            if (input != null) await input.DisposeAsync();
         }
-    });
+    }).DisableAntiforgery();
 
     app.MapMcp();
     app.Run();
 }
 
-static async Task<Stream?> ExtractUploadStreamAsync(HttpRequest req, long maxBytes, CancellationToken ct)
+static async Task<Stream?> ExtractUploadStreamAsync(HttpRequest req, CancellationToken ct)
 {
     var contentType = req.ContentType ?? "";
     if (contentType.StartsWith("multipart/form-data", StringComparison.OrdinalIgnoreCase))
@@ -312,13 +390,10 @@ static async Task<Stream?> ExtractUploadStreamAsync(HttpRequest req, long maxByt
             var isFile = !string.IsNullOrEmpty(disp.FileName.Value) || !string.IsNullOrEmpty(disp.FileNameStar.Value);
             if (isFile && string.Equals(name, "file", StringComparison.OrdinalIgnoreCase))
             {
-                // Size-bound the section as we read it so an oversized file
-                // is rejected before it lands in memory.
-                using var bounded = new SizeBoundedStream(section.Body, maxBytes, leaveInnerOpen: true);
-                var ms = new MemoryStream();
-                await bounded.CopyToAsync(ms, ct);
-                ms.Position = 0;
-                return ms;
+                // Hand back the section body directly — caller wraps in
+                // SizeBoundedStream + CryptoStream and pipes to blob upload
+                // without buffering in this process.
+                return section.Body;
             }
         }
         return null;

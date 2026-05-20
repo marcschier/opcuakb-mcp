@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.36.1.42791",
-      "templateHash": "7316420565944451378"
+      "templateHash": "18255042781201832232"
     }
   },
   "parameters": {
@@ -59,6 +59,13 @@
       "metadata": {
         "description": "Optional: UA-CloudLibrary password"
       }
+    },
+    "lockdownStorage": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "When true, set storage publicNetworkAccess=Disabled and require VNet/private-endpoint access only. Must already have the v2 Container Apps environment + private endpoint provisioned and validated before flipping this on, otherwise the v1 apps lose all storage access."
+      }
     }
   },
   "variables": {
@@ -67,12 +74,18 @@
     "storageName": "[take(replace(format('{0}storage', parameters('prefix')), '-', ''), 24)]",
     "docaiName": "[format('{0}-docai', parameters('prefix'))]",
     "acrName": "[replace(format('{0}registry', parameters('prefix')), '-', '')]",
-    "envName": "[format('{0}-env', parameters('prefix'))]",
-    "jobName": "[format('{0}-pipeline-job', parameters('prefix'))]",
+    "envName": "[format('{0}-env-v2', parameters('prefix'))]",
+    "jobName": "[format('{0}-pipeline-job-v2', parameters('prefix'))]",
+    "mcpAppName": "[format('{0}-mcp-server-v2', parameters('prefix'))]",
     "logAnalyticsName": "[format('{0}-logs', parameters('prefix'))]",
     "workbookName": "[guid(resourceGroup().id, 'opcua-pipeline-dashboard')]",
+    "vnetName": "[format('{0}-vnet', parameters('prefix'))]",
+    "vnetCidr": "10.20.0.0/24",
+    "appsSubnetName": "apps-subnet",
+    "appsSubnetCidr": "10.20.0.0/26",
+    "peSubnetName": "pe-subnet",
+    "peSubnetCidr": "10.20.0.64/28",
     "containerImage": "[if(empty(parameters('pipelineImage')), 'mcr.microsoft.com/dotnet/runtime:9.0', parameters('pipelineImage'))]",
-    "mcpAppName": "[format('{0}-mcp-server', parameters('prefix'))]",
     "cognitiveServicesOpenAIUserRole": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')]",
     "storageBlobDataContributorRole": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')]",
     "workbookContent": "{\"version\":\"Notebook/1.0\",\"items\":[{\"type\":1,\"content\":{\"json\":\"# OPC UA Knowledge Base Pipeline Dashboard\\n\\nMonitors crawl + index pipeline for reference.opcfoundation.org\"},\"name\":\"header\"},{\"type\":3,\"content\":{\"version\":\"KqlItem/1.0\",\"query\":\"ContainerAppConsoleLogs_CL\\n| where ContainerGroupName_s startswith \\\"opcua-pipeline-job\\\"\\n| where Log_s has \\\"[PIPELINE]\\\"\\n| parse Log_s with * \\\"Phase=\\\" Phase:string \\\" Status=\\\" Status:string \\\" \\\" *\\n| project TimeGenerated, Phase, Status\\n| order by TimeGenerated desc\\n| take 20\",\"size\":1,\"title\":\"Recent Pipeline Events\",\"timeContext\":{\"durationMs\":604800000},\"queryType\":0,\"resourceType\":\"microsoft.operationalinsights/workspaces\"},\"name\":\"pipeline-events\"},{\"type\":3,\"content\":{\"version\":\"KqlItem/1.0\",\"query\":\"ContainerAppConsoleLogs_CL\\n| where ContainerGroupName_s startswith \\\"opcua-pipeline-job\\\"\\n| where Log_s has \\\"[CRAWL]\\\" and Log_s has \\\"Downloaded=\\\"\\n| parse Log_s with * \\\"Downloaded=\\\" Downloaded:long \\\" Skipped=\\\" Skipped:long \\\" Errors=\\\" Errors:long \\\" Queued=\\\" Queued:long\\n| project TimeGenerated, Downloaded, Skipped, Errors, Queued\\n| order by TimeGenerated asc\",\"size\":0,\"title\":\"Crawl Progress Over Time\",\"timeContext\":{\"durationMs\":86400000},\"queryType\":0,\"resourceType\":\"microsoft.operationalinsights/workspaces\",\"visualization\":\"linechart\",\"chartSettings\":{\"yAxis\":[\"Downloaded\",\"Queued\",\"Errors\"]}},\"name\":\"crawl-progress\"},{\"type\":3,\"content\":{\"version\":\"KqlItem/1.0\",\"query\":\"ContainerAppConsoleLogs_CL\\n| where ContainerGroupName_s startswith \\\"opcua-pipeline-job\\\"\\n| where Log_s has \\\"[CRAWL]\\\" and Log_s has \\\"Downloaded=\\\"\\n| parse Log_s with * \\\"Downloaded=\\\" Downloaded:long \\\" Skipped=\\\" Skipped:long \\\" Errors=\\\" Errors:long *\\n| summarize MaxDownloaded=max(Downloaded), MaxSkipped=max(Skipped), TotalErrors=max(Errors) by bin(TimeGenerated, 1h)\\n| order by TimeGenerated desc\\n| take 1\",\"size\":4,\"title\":\"Latest Crawl Stats\",\"timeContext\":{\"durationMs\":86400000},\"queryType\":0,\"resourceType\":\"microsoft.operationalinsights/workspaces\",\"visualization\":\"tiles\",\"tileSettings\":{\"showBorder\":true}},\"name\":\"crawl-stats\"},{\"type\":3,\"content\":{\"version\":\"KqlItem/1.0\",\"query\":\"ContainerAppConsoleLogs_CL\\n| where ContainerGroupName_s startswith \\\"opcua-pipeline-job\\\"\\n| where Log_s has \\\"[INDEX]\\\" and Log_s has \\\"Phase=\\\"\\n| parse Log_s with * \\\"Phase=\\\" Phase:string \\\" \\\" *\\n| extend Embedded = extract(\\\"Embedded=([0-9]+)\\\", 1, Log_s)\\n| extend Uploaded = extract(\\\"Uploaded=([0-9]+)\\\", 1, Log_s)\\n| extend Chunks = extract(\\\"Chunks=([0-9]+)\\\", 1, Log_s)\\n| extend Parsed = extract(\\\"Parsed=([0-9]+)\\\", 1, Log_s)\\n| project TimeGenerated, Phase, Parsed, Chunks, Embedded, Uploaded\\n| order by TimeGenerated asc\",\"size\":0,\"title\":\"Index Progress Over Time\",\"timeContext\":{\"durationMs\":86400000},\"queryType\":0,\"resourceType\":\"microsoft.operationalinsights/workspaces\",\"visualization\":\"linechart\"},\"name\":\"index-progress\"},{\"type\":3,\"content\":{\"version\":\"KqlItem/1.0\",\"query\":\"ContainerAppConsoleLogs_CL\\n| where ContainerGroupName_s startswith \\\"opcua-pipeline-job\\\"\\n| where Log_s has \\\"Error=\\\" or Log_s has \\\"error\\\" or Log_s has \\\"Warning\\\"\\n| project TimeGenerated, Log_s\\n| order by TimeGenerated desc\\n| take 50\",\"size\":1,\"title\":\"Errors & Warnings\",\"timeContext\":{\"durationMs\":604800000},\"queryType\":0,\"resourceType\":\"microsoft.operationalinsights/workspaces\",\"visualization\":\"table\"},\"name\":\"errors\"},{\"type\":3,\"content\":{\"version\":\"KqlItem/1.0\",\"query\":\"ContainerAppConsoleLogs_CL\\n| where ContainerGroupName_s startswith \\\"opcua-pipeline-job\\\"\\n| where Log_s has \\\"[PIPELINE]\\\" and Log_s has \\\"TotalElapsedSec=\\\"\\n| parse Log_s with * \\\"TotalElapsedSec=\\\" ElapsedSec:long\\n| project TimeGenerated, DurationMin=ElapsedSec/60.0\\n| order by TimeGenerated desc\\n| take 10\",\"size\":1,\"title\":\"Execution History (Duration in Minutes)\",\"timeContext\":{\"durationMs\":2592000000},\"queryType\":0,\"resourceType\":\"microsoft.operationalinsights/workspaces\",\"visualization\":\"barchart\"},\"name\":\"exec-history\"}],\"isLocked\":false}\r\n"
@@ -184,8 +197,131 @@
         "allowBlobPublicAccess": false,
         "supportsHttpsTrafficOnly": true,
         "allowSharedKeyAccess": false,
-        "defaultToOAuthAuthentication": true
+        "defaultToOAuthAuthentication": true,
+        "publicNetworkAccess": "[if(parameters('lockdownStorage'), 'Disabled', 'Enabled')]",
+        "networkAcls": "[if(parameters('lockdownStorage'), createObject('defaultAction', 'Deny', 'bypass', 'AzureServices', 'ipRules', createArray(), 'virtualNetworkRules', createArray()), createObject('defaultAction', 'Allow', 'bypass', 'AzureServices', 'ipRules', createArray(), 'virtualNetworkRules', createArray()))]"
       }
+    },
+    "vnet": {
+      "type": "Microsoft.Network/virtualNetworks",
+      "apiVersion": "2023-11-01",
+      "name": "[variables('vnetName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "[variables('vnetCidr')]"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "[variables('appsSubnetName')]",
+            "properties": {
+              "addressPrefix": "[variables('appsSubnetCidr')]",
+              "delegations": [
+                {
+                  "name": "Microsoft.App.environments",
+                  "properties": {
+                    "serviceName": "Microsoft.App/environments"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "[variables('peSubnetName')]",
+            "properties": {
+              "addressPrefix": "[variables('peSubnetCidr')]",
+              "privateEndpointNetworkPolicies": "Disabled"
+            }
+          }
+        ]
+      }
+    },
+    "appsSubnet": {
+      "existing": true,
+      "type": "Microsoft.Network/virtualNetworks/subnets",
+      "apiVersion": "2023-11-01",
+      "name": "[format('{0}/{1}', variables('vnetName'), variables('appsSubnetName'))]",
+      "dependsOn": [
+        "vnet"
+      ]
+    },
+    "peSubnet": {
+      "existing": true,
+      "type": "Microsoft.Network/virtualNetworks/subnets",
+      "apiVersion": "2023-11-01",
+      "name": "[format('{0}/{1}', variables('vnetName'), variables('peSubnetName'))]",
+      "dependsOn": [
+        "vnet"
+      ]
+    },
+    "blobPrivateDnsZone": {
+      "type": "Microsoft.Network/privateDnsZones",
+      "apiVersion": "2020-06-01",
+      "name": "privatelink.blob.core.windows.net",
+      "location": "global"
+    },
+    "blobPrivateDnsZoneLink": {
+      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+      "apiVersion": "2020-06-01",
+      "name": "[format('{0}/{1}', 'privatelink.blob.core.windows.net', format('{0}-link', variables('vnetName')))]",
+      "location": "global",
+      "properties": {
+        "registrationEnabled": false,
+        "virtualNetwork": {
+          "id": "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+        }
+      },
+      "dependsOn": [
+        "blobPrivateDnsZone",
+        "vnet"
+      ]
+    },
+    "storagePrivateEndpoint": {
+      "type": "Microsoft.Network/privateEndpoints",
+      "apiVersion": "2023-11-01",
+      "name": "[format('{0}-storage-pe', parameters('prefix'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "subnet": {
+          "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('peSubnetName'))]"
+        },
+        "privateLinkServiceConnections": [
+          {
+            "name": "blob",
+            "properties": {
+              "privateLinkServiceId": "[resourceId('Microsoft.Storage/storageAccounts', variables('storageName'))]",
+              "groupIds": [
+                "blob"
+              ]
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "storageAccount",
+        "vnet"
+      ]
+    },
+    "storagePrivateEndpointDnsGroup": {
+      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+      "apiVersion": "2023-11-01",
+      "name": "[format('{0}/{1}', format('{0}-storage-pe', parameters('prefix')), 'blob-dns-zone-group')]",
+      "properties": {
+        "privateDnsZoneConfigs": [
+          {
+            "name": "blob",
+            "properties": {
+              "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.blob.core.windows.net')]"
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "blobPrivateDnsZone",
+        "storagePrivateEndpoint"
+      ]
     },
     "docai": {
       "type": "Microsoft.CognitiveServices/accounts",
@@ -237,10 +373,21 @@
             "customerId": "[reference('logAnalytics').customerId]",
             "sharedKey": "[listKeys('logAnalytics', '2023-09-01').primarySharedKey]"
           }
+        },
+        "workloadProfiles": [
+          {
+            "name": "Consumption",
+            "workloadProfileType": "Consumption"
+          }
+        ],
+        "vnetConfiguration": {
+          "infrastructureSubnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('appsSubnetName'))]",
+          "internal": false
         }
       },
       "dependsOn": [
-        "logAnalytics"
+        "logAnalytics",
+        "vnet"
       ]
     },
     "pipelineJob": {
@@ -253,6 +400,7 @@
       },
       "properties": {
         "environmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('envName'))]",
+        "workloadProfileName": "Consumption",
         "configuration": {
           "triggerType": "Schedule",
           "scheduleTriggerConfig": {
@@ -302,6 +450,7 @@
       },
       "properties": {
         "environmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('envName'))]",
+        "workloadProfileName": "Consumption",
         "configuration": {
           "activeRevisionsMode": "Single",
           "ingress": {
@@ -334,7 +483,7 @@
               "name": "mcp-server",
               "image": "[if(empty(parameters('pipelineImage')), 'mcr.microsoft.com/dotnet/aspnet:10.0', format('{0}/opcua-mcp-server:latest', reference('acr').loginServer))]",
               "resources": {
-                "cpu": "[json('0.5')]",
+                "cpu": "[json('1.0')]",
                 "memory": "2Gi"
               },
               "env": [
@@ -390,7 +539,8 @@
         "containerEnv",
         "foundry",
         "search",
-        "storageAccount"
+        "storageAccount",
+        "storagePrivateEndpointDnsGroup"
       ]
     },
     "searchFoundryRoleAssignment": {
@@ -557,6 +707,14 @@
     "mcpServerEndpoint": {
       "type": "string",
       "value": "[format('https://{0}', reference('mcpServer').configuration.ingress.fqdn)]"
+    },
+    "vnetId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+    },
+    "storagePrivateEndpointId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-storage-pe', parameters('prefix')))]"
     }
   }
 }

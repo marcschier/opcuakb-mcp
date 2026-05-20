@@ -142,6 +142,7 @@ Tools are implemented as static classes with `[McpServerToolType]` and `[McpServ
 | `KbService` | KB retrieve API + GPT-4o chat completion for RAG. Lives in `OpcUaKb.Core`, shared with Agent. |
 | `NodeSetLoader` | Resolves NodeSet input from any of three modes (inline xml ≤30 KB, `blob:` ref, allow-listed `https://` URL). URL fetches buffer once to memory bounded by `MCP_NODESET_MAX_BYTES`. Auto-redirects disabled (SSRF defense). |
 | `NodeSetXmlReader` | Streaming OPC UA NodeSet parser using `XmlReader` — O(1) memory wrt file size; replaces `XDocument.Parse`. Used by `validate_nodeset` and `check_compliance` so a 20 MB NodeSet parses in ~10 MB working set. |
+| `HashingStream` | Read-through tee that feeds every byte the caller pulls into an `IncrementalHash`. Powers the streaming `/upload-nodeset` endpoint — SHA-256 is computed in the same pass that uploads to blob storage, no whole-payload buffering. |
 
 ## NodeSet input modes
 
@@ -153,14 +154,14 @@ Tools are implemented as static classes with `[McpServerToolType]` and `[McpServ
 | `nodeset_ref` | Server-side reference, e.g. `blob:uploads/{sha256}.xml` returned by `POST /upload-nodeset`, or `blob:nodesets/UA-Nodeset/.../Opc.Ua.Di.NodeSet2.xml` for pipeline-indexed paths | `MCP_NODESET_MAX_BYTES` (default 50 MB) |
 | `nodeset_url` | Public `https://` URL on the allow-list (defaults: `*.opcfoundation.org`, `raw.githubusercontent.com`, `objects.githubusercontent.com`) | Same |
 
-To upload a private NodeSet for the model to reference, POST it to the api-key-protected upload endpoint:
+To upload a private NodeSet for the model to reference, POST it to the api-key-protected upload endpoint. The MCP server streams the upload directly to blob storage via the private endpoint without buffering the whole payload in memory — content-addressed by SHA-256 with same-account server-side copy from a staging path to the final `uploads/{sha256}.xml`. Lifecycle policy deletes both staging and final paths after 1 day.
 
 ```bash
 curl -X POST -H "api-key: $MCP_API_KEY" \
   -H "Content-Type: application/xml" \
   --data-binary @MyNodeSet.xml \
   https://<mcp-server-fqdn>/upload-nodeset
-# → { "nodeset_ref": "blob:uploads/{sha256}.xml", "size_bytes": N, "sha256": "..." }
+# → { "nodeset_ref": "blob:uploads/{sha256}.xml", "size_bytes": N, "sha256": "...", "dedup": false }
 ```
 
 The agent then passes the returned `nodeset_ref` to a tool. Uploaded blobs are deleted after 1 day by the storage lifecycle policy.
