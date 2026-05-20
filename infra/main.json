@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.36.1.42791",
-      "templateHash": "1788139197762115119"
+      "templateHash": "7316420565944451378"
     }
   },
   "parameters": {
@@ -334,8 +334,8 @@
               "name": "mcp-server",
               "image": "[if(empty(parameters('pipelineImage')), 'mcr.microsoft.com/dotnet/aspnet:10.0', format('{0}/opcua-mcp-server:latest', reference('acr').loginServer))]",
               "resources": {
-                "cpu": "[json('0.25')]",
-                "memory": "0.5Gi"
+                "cpu": "[json('0.5')]",
+                "memory": "2Gi"
               },
               "env": [
                 {
@@ -349,6 +349,10 @@
                 {
                   "name": "AOAI_ENDPOINT",
                   "value": "[reference('foundry').endpoint]"
+                },
+                {
+                  "name": "STORAGE_ACCOUNT_NAME",
+                  "value": "[variables('storageName')]"
                 },
                 {
                   "name": "MCP_API_KEY",
@@ -385,7 +389,8 @@
         "acr",
         "containerEnv",
         "foundry",
-        "search"
+        "search",
+        "storageAccount"
       ]
     },
     "searchFoundryRoleAssignment": {
@@ -445,6 +450,57 @@
       },
       "dependsOn": [
         "pipelineJob",
+        "storageAccount"
+      ]
+    },
+    "mcpServerStorageBlobContributor": {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[format('Microsoft.Storage/storageAccounts/{0}', variables('storageName'))]",
+      "name": "[guid(resourceId('Microsoft.App/containerApps', variables('mcpAppName')), resourceId('Microsoft.Storage/storageAccounts', variables('storageName')), 'StorageBlobDataContributor')]",
+      "properties": {
+        "principalId": "[reference('mcpServer', '2024-03-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[variables('storageBlobDataContributorRole')]"
+      },
+      "dependsOn": [
+        "mcpServer",
+        "storageAccount"
+      ]
+    },
+    "storageLifecyclePolicy": {
+      "type": "Microsoft.Storage/storageAccounts/managementPolicies",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}', variables('storageName'), 'default')]",
+      "properties": {
+        "policy": {
+          "rules": [
+            {
+              "name": "expire-uploaded-nodesets",
+              "enabled": true,
+              "type": "Lifecycle",
+              "definition": {
+                "filters": {
+                  "blobTypes": [
+                    "blockBlob"
+                  ],
+                  "prefixMatch": [
+                    "opcua-content/uploads/"
+                  ]
+                },
+                "actions": {
+                  "baseBlob": {
+                    "delete": {
+                      "daysAfterCreationGreaterThan": 1
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
         "storageAccount"
       ]
     },

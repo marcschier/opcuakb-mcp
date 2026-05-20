@@ -1,68 +1,106 @@
 using System.ComponentModel;
 using System.Text;
-using System.Xml.Linq;
 using ModelContextProtocol.Server;
 
 [McpServerToolType]
 static class CheckComplianceTool
 {
-    static readonly XNamespace Ns = "http://opcfoundation.org/UA/2011/03/UANodeSet.xsd";
-
     [McpServerTool(Name = "check_compliance"),
      Description("Check whether a NodeSet XML implementation is compliant with a companion specification's " +
         "type definitions. Compares the implementation against the indexed spec to find: missing mandatory nodes, " +
         "missing optional nodes (info), data type mismatches, incorrect modelling rules, and extra nodes not in the spec. " +
-        "Use this to verify that an OPC UA server correctly implements a companion specification.")]
+        "Use this to verify that an OPC UA server correctly implements a companion specification. " +
+        "Provide exactly ONE input source: " +
+        "(a) `nodeset_xml` for tiny snippets (≤30 KB hard cap); " +
+        "(b) `nodeset_ref` of the form `blob:uploads/{sha256}.xml` returned by POST /upload-nodeset, " +
+        "or `blob:nodesets/...` for pipeline-indexed NodeSets; " +
+        "(c) `nodeset_url` pointing at an allow-listed https URL. Use (b) or (c) for real NodeSets.")]
     public static async Task<string> CheckCompliance(
         SearchService search,
-        [Description("The NodeSet XML content of the implementation to check")] string nodeset_xml,
+        NodeSetLoader loader,
         [Description("Companion spec name to check against (e.g., DI, Pumps, PlasticsRubber, Machinery)")] string spec,
-        [Description("Specific ObjectType to check compliance for (optional — checks all types if omitted)")] string? object_type = null)
+        [Description("Optional: inline NodeSet XML, ≤30 KB. Use only for hand-crafted snippets.")]
+        string? nodeset_xml = null,
+        [Description("Optional: server-side reference, e.g. `blob:uploads/{sha256}.xml` returned " +
+            "by POST /upload-nodeset, or `blob:nodesets/UA-Nodeset/...`.")]
+        string? nodeset_ref = null,
+        [Description("Optional: https URL to fetch. Must match the configured allow-list.")]
+        string? nodeset_url = null,
+        [Description("Specific ObjectType to check compliance for (optional — checks all types if omitted)")]
+        string? object_type = null)
     {
-        // Parse the implementation NodeSet
-        XDocument xdoc;
-        try { xdoc = XDocument.Parse(nodeset_xml); }
-        catch (Exception ex) { return $"❌ Failed to parse XML: {ex.Message}"; }
-
-        var root = xdoc.Root;
-        if (root == null) return "❌ Invalid XML: no root element";
-
-        // Extract implemented nodes from the provided NodeSet
-        var implNodes = new Dictionary<string, ImplNode>(StringComparer.OrdinalIgnoreCase);
-        foreach (var el in root.Elements())
+        NodeSetSource source;
+        try
         {
-            var localName = el.Name.LocalName;
-            if (!IsNodeElement(localName)) continue;
+            source = await loader.ResolveAsync(nodeset_xml, nodeset_ref, nodeset_url);
+        }
+        catch (NodeSetLoadException ex)
+        {
+            return $"❌ {ex.Message}";
+        }
 
-            var browseName = StripNsPrefix(el.Attribute("BrowseName")?.Value ?? "");
-            var nodeClass = MapNodeClass(localName);
-            var dataType = el.Attribute("DataType")?.Value ?? "";
-            var parentNodeId = el.Attribute("ParentNodeId")?.Value;
+        // First pass — build the NodeId → BrowseName lookup so we can
+        // resolve `ParentType` from inverse HasComponent/HasProperty
+        // refs in the second pass.
+        NodeSetHeader header;
+        try
+        {
+            using var pass1 = await source.OpenAsync();
+            header = await NodeSetXmlReader.ReadHeaderAsync(pass1);
+        }
+        catch (System.Xml.XmlException ex)
+        {
+            return $"❌ Failed to parse XML: {ex.Message}";
+        }
+        catch (NodeSetLoadException ex)
+        {
+            return $"❌ {ex.Message}";
+        }
 
-            // Resolve parent BrowseName
-            string parentType = "";
-            var refs = el.Element(Ns + "References")?.Elements(Ns + "Reference") ?? [];
-            foreach (var r in refs)
+        if (!header.RootSeen)
+            return "❌ Invalid XML: root element must be <UANodeSet>.";
+
+        var implNodes = new Dictionary<string, ImplNode>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            using var pass2 = await source.OpenAsync();
+            await foreach (var node in NodeSetXmlReader.EnumerateNodesAsync(pass2))
             {
-                var rt = r.Attribute("ReferenceType")?.Value ?? "";
-                if (rt is "HasComponent" or "HasProperty" or "HasOrderedComponent"
-                    or "i=47" or "i=46" or "i=49"
-                    && r.Attribute("IsForward")?.Value != "true")
+                var browseName = NodeSetXmlReader.StripNsPrefix(node.BrowseName);
+                var nodeClass = MapNodeClass(node.NodeClass);
+
+                // Resolve parent BrowseName from inverse HasComponent / HasProperty / HasOrderedComponent.
+                string parentType = "";
+                foreach (var r in node.References)
                 {
-                    // Try to resolve from nodeIndex
-                    parentType = ResolveParentBrowseName(root, r.Value.Trim());
-                    break;
+                    var rt = r.ReferenceType;
+                    if (rt is "HasComponent" or "HasProperty" or "HasOrderedComponent"
+                        or "i=47" or "i=46" or "i=49"
+                        && r.IsForward != "true")
+                    {
+                        if (header.BrowseNameByNodeId.TryGetValue(r.Target, out var pbn))
+                            parentType = pbn;
+                        break;
+                    }
                 }
-            }
 
-            var key = $"{nodeClass}|{browseName}|{parentType}";
-            implNodes.TryAdd(key, new ImplNode
-            {
-                BrowseName = browseName,
-                NodeClass = nodeClass,
-                ParentType = parentType,
-                DataType = dataType,
-            });
+                var key = $"{nodeClass}|{browseName}|{parentType}";
+                implNodes.TryAdd(key, new ImplNode
+                {
+                    BrowseName = browseName,
+                    NodeClass = nodeClass,
+                    ParentType = parentType,
+                    DataType = node.DataType,
+                });
+            }
+        }
+        catch (NodeSetLoadException ex)
+        {
+            return $"❌ {ex.Message}";
+        }
+        catch (System.Xml.XmlException ex)
+        {
+            return $"❌ Failed to parse XML: {ex.Message}";
         }
 
         // Fetch spec definitions from the index — try opcfoundation, then cloudlib
@@ -201,21 +239,6 @@ static class CheckComplianceTool
         return sb.ToString();
     }
 
-    static string ResolveParentBrowseName(XElement root, string targetNodeId)
-    {
-        foreach (var el in root.Elements())
-        {
-            var nodeId = el.Attribute("NodeId")?.Value;
-            if (nodeId == targetNodeId)
-                return StripNsPrefix(el.Attribute("BrowseName")?.Value ?? "");
-        }
-        return "";
-    }
-
-    static bool IsNodeElement(string localName) => localName is
-        "UAObjectType" or "UAVariableType" or "UAObject" or "UAVariable"
-        or "UAMethod" or "UADataType" or "UAReferenceType" or "UAView";
-
     static string MapNodeClass(string localName) => localName switch
     {
         "UAObjectType" => "ObjectType",
@@ -228,13 +251,6 @@ static class CheckComplianceTool
         "UAView" => "View",
         _ => localName,
     };
-
-    static string StripNsPrefix(string browseName)
-    {
-        var idx = browseName.IndexOf(':');
-        return idx >= 0 && idx < 4 && int.TryParse(browseName[..idx], out _)
-            ? browseName[(idx + 1)..] : browseName;
-    }
 
     sealed class ImplNode
     {

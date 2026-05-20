@@ -141,6 +141,12 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     supportsHttpsTrafficOnly: true
     allowSharedKeyAccess: false
     defaultToOAuthAuthentication: true
+    // Public network access is enabled so the pipeline job and MCP server
+    // (which run in the Container Apps Environment without VNet integration)
+    // can reach the storage account via Entra-only auth. allowSharedKeyAccess
+    // and allowBlobPublicAccess remain false — every request must be a valid
+    // Entra token from a principal that holds Storage Blob Data Contributor.
+    publicNetworkAccess: 'Enabled'
   }
 }
 
@@ -326,8 +332,8 @@ resource mcpServer 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'mcp-server'
           image: mcpImage
           resources: {
-            cpu: json('0.25')
-            memory: '0.5Gi'
+            cpu: json('1.0')
+            memory: '2Gi'
           }
           env: [
             {
@@ -341,6 +347,12 @@ resource mcpServer 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'AOAI_ENDPOINT'
               value: foundry.properties.endpoint
+            }
+            {
+              name: 'STORAGE_ACCOUNT_NAME'
+              // Used by NodeSetLoader to resolve nodeset_ref=blob:... and
+              // by POST /upload-nodeset for content-addressed user uploads.
+              value: storageAccount.name
             }
             {
               name: 'MCP_API_KEY'
@@ -429,6 +441,51 @@ resource pipelineJobStorageBlobContributor 'Microsoft.Authorization/roleAssignme
     principalId: pipelineJob.identity.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: storageBlobDataContributorRole
+  }
+}
+
+// MCP server also needs Storage Blob Data Contributor — it reads NodeSets
+// referenced via `nodeset_ref=blob:...` and writes content-addressed user
+// uploads to `uploads/{sha256}.xml` via the POST /upload-nodeset endpoint.
+resource mcpServerStorageBlobContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(mcpServer.id, storageAccount.id, 'StorageBlobDataContributor')
+  scope: storageAccount
+  properties: {
+    principalId: mcpServer.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: storageBlobDataContributorRole
+  }
+}
+
+// Lifecycle policy — auto-delete user uploads after 1 day to keep the
+// privacy footprint minimal. Pipeline-written paths (nodesets/, html/,
+// sts-xml/, markdown/, images/, api/) are untouched.
+resource storageLifecyclePolicy 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05-01' = {
+  parent: storageAccount
+  name: 'default'
+  properties: {
+    policy: {
+      rules: [
+        {
+          name: 'expire-uploaded-nodesets'
+          enabled: true
+          type: 'Lifecycle'
+          definition: {
+            filters: {
+              blobTypes: ['blockBlob']
+              prefixMatch: ['opcua-content/uploads/']
+            }
+            actions: {
+              baseBlob: {
+                delete: {
+                  daysAfterCreationGreaterThan: 1
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
   }
 }
 

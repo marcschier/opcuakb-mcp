@@ -110,10 +110,15 @@ The MCP server is the single endpoint for all 11 tools including RAG Q&A. It con
 | `MCP_REQUIRE_AUTH` | | `false` | Set `true` to block all anonymous requests |
 | `MCP_ANON_RATE_LIMIT` | | `10` | Max requests/min for anonymous callers (per IP) |
 | `MCP_AUTH_RATE_LIMIT` | | `0` | Max requests/min for authenticated callers (0 = unlimited) |
+| `STORAGE_ACCOUNT_NAME` | | | Enables `nodeset_ref=blob:...` and the `POST /upload-nodeset` endpoint. Pair with a system MI that has Storage Blob Data Contributor. |
+| `MCP_NODESET_CONTAINER` | | `opcua-content` | Blob container the NodeSet loader reads from / uploads land in. |
+| `MCP_NODESET_MAX_BYTES` | | `52428800` (50 MB) | Cap on both inline uploads and outbound URL fetches. |
+| `MCP_NODESET_URL_ALLOWLIST` | | `*.opcfoundation.org,raw.githubusercontent.com,objects.githubusercontent.com` | Comma-separated host allow-list for `nodeset_url`. `*` prefix is a wildcard. |
+| `MCP_UPLOAD_KEY` | | falls back to `MCP_API_KEY` | Separate api-key for the upload endpoint. Never falls back to `SEARCH_API_KEY`. |
 
 ### Tool Implementation
 
-Tools are implemented as static classes with `[McpServerToolType]` and `[McpServerTool]` attributes in `src/OpcUaKb.McpServer/Tools/`:
+Tools are implemented as static classes with `[McpServerToolType]` and `[McpServerTool]` attributes in `src/OpcUaKb.Core/Tools/`. All 11 tool implementations live in `OpcUaKb.Core` so any future host can reuse them.
 
 | File | Tools |
 |------|-------|
@@ -135,6 +140,30 @@ Tools are implemented as static classes with `[McpServerToolType]` and `[McpServ
 |-------|---------|
 | `SearchService` | Shared Azure AI Search client for structured queries |
 | `KbService` | KB retrieve API + GPT-4o chat completion for RAG. Lives in `OpcUaKb.Core`, shared with Agent. |
+| `NodeSetLoader` | Resolves NodeSet input from any of three modes (inline xml ≤30 KB, `blob:` ref, allow-listed `https://` URL). URL fetches buffer once to memory bounded by `MCP_NODESET_MAX_BYTES`. Auto-redirects disabled (SSRF defense). |
+| `NodeSetXmlReader` | Streaming OPC UA NodeSet parser using `XmlReader` — O(1) memory wrt file size; replaces `XDocument.Parse`. Used by `validate_nodeset` and `check_compliance` so a 20 MB NodeSet parses in ~10 MB working set. |
+
+## NodeSet input modes
+
+`validate_nodeset` and `check_compliance` accept the NodeSet via three mutually-exclusive parameters — provide **exactly one**:
+
+| Param | Use when | Limit |
+|-------|----------|-------|
+| `nodeset_xml` | Inline XML for tiny snippets the model can emit directly | ≤ 30 KB (LLM tool-call args ceiling) |
+| `nodeset_ref` | Server-side reference, e.g. `blob:uploads/{sha256}.xml` returned by `POST /upload-nodeset`, or `blob:nodesets/UA-Nodeset/.../Opc.Ua.Di.NodeSet2.xml` for pipeline-indexed paths | `MCP_NODESET_MAX_BYTES` (default 50 MB) |
+| `nodeset_url` | Public `https://` URL on the allow-list (defaults: `*.opcfoundation.org`, `raw.githubusercontent.com`, `objects.githubusercontent.com`) | Same |
+
+To upload a private NodeSet for the model to reference, POST it to the api-key-protected upload endpoint:
+
+```bash
+curl -X POST -H "api-key: $MCP_API_KEY" \
+  -H "Content-Type: application/xml" \
+  --data-binary @MyNodeSet.xml \
+  https://<mcp-server-fqdn>/upload-nodeset
+# → { "nodeset_ref": "blob:uploads/{sha256}.xml", "size_bytes": N, "sha256": "..." }
+```
+
+The agent then passes the returned `nodeset_ref` to a tool. Uploaded blobs are deleted after 1 day by the storage lifecycle policy.
 
 ## Foundry Hosted Agent
 

@@ -1,157 +1,109 @@
 using System.ComponentModel;
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Xml.Linq;
 using ModelContextProtocol.Server;
 
 [McpServerToolType]
 static class ValidateNodeSetTool
 {
-    static readonly XNamespace Ns = "http://opcfoundation.org/UA/2011/03/UANodeSet.xsd";
-
-    static readonly HashSet<string> ValidNodeElements = new(StringComparer.Ordinal)
-    {
-        "UAObjectType", "UAVariableType", "UAObject", "UAVariable",
-        "UAMethod", "UADataType", "UAReferenceType", "UAView",
-    };
-
     // OPC 11030 §2.1.2: BrowseNames should be PascalCase, no underscores
-    static readonly Regex PascalCasePattern = new(@"^[A-Z][a-zA-Z0-9]*$", RegexOptions.Compiled);
     static readonly Regex ContainsUnderscore = new(@"_", RegexOptions.Compiled);
 
     [McpServerTool(Name = "validate_nodeset"),
      Description("Validate an OPC UA NodeSet XML against the OPC UA standard and OPC 11030 " +
         "Modelling Best Practices. Checks naming conventions, modelling rules, type hierarchy, " +
         "reference types, and structural correctness. Returns a report with errors, warnings, " +
-        "and informational findings with spec references.")]
-    public static string ValidateNodeSet(
-        [Description("The NodeSet XML content to validate")] string nodeset_xml)
+        "and informational findings with spec references. " +
+        "Provide exactly ONE input source: " +
+        "(a) `nodeset_xml` for tiny snippets (≤30 KB hard cap — the LLM tool-call args limit); " +
+        "(b) `nodeset_ref` of the form `blob:uploads/{sha256}.xml` returned by POST /upload-nodeset, " +
+        "or `blob:nodesets/...` for pipeline-indexed NodeSets; " +
+        "(c) `nodeset_url` pointing at an https URL on the allow-list (UA-Nodeset on GitHub, " +
+        "*.opcfoundation.org, etc.). Use (b) or (c) for any real NodeSet — they're virtually always " +
+        "well over 30 KB.")]
+    public static async Task<string> ValidateNodeSet(
+        NodeSetLoader loader,
+        [Description("Optional: inline NodeSet XML, ≤30 KB. Use only for hand-crafted snippets.")]
+        string? nodeset_xml = null,
+        [Description("Optional: server-side reference, e.g. `blob:uploads/{sha256}.xml` returned " +
+            "by POST /upload-nodeset, or `blob:nodesets/UA-Nodeset/.../Opc.Ua.Di.NodeSet2.xml`.")]
+        string? nodeset_ref = null,
+        [Description("Optional: https URL to fetch. Must match the configured allow-list " +
+            "(defaults: *.opcfoundation.org, raw.githubusercontent.com).")]
+        string? nodeset_url = null)
     {
-        var report = new List<Finding>();
-
-        // Parse XML
-        XDocument xdoc;
+        NodeSetSource source;
         try
         {
-            xdoc = XDocument.Parse(nodeset_xml);
+            source = await loader.ResolveAsync(nodeset_xml, nodeset_ref, nodeset_url);
         }
-        catch (Exception ex)
+        catch (NodeSetLoadException ex)
+        {
+            return $"❌ {ex.Message}";
+        }
+
+        NodeSetHeader header;
+        var report = new List<Finding>();
+        try
+        {
+            using (var pass1 = await source.OpenAsync())
+            {
+                header = await NodeSetXmlReader.ReadHeaderAsync(pass1);
+            }
+
+            if (!header.RootSeen)
+                return "❌ Root element must be <UANodeSet> with namespace " + NodeSetXmlReader.Ns;
+
+            // §2.5 NamespaceUri conventions
+            ValidateNamespaceUris(header.NamespaceUris, report);
+
+            var nodeCount = 0;
+            var seenNodeIds = new HashSet<string>(StringComparer.Ordinal);
+
+            using var pass2 = await source.OpenAsync();
+            await foreach (var node in NodeSetXmlReader.EnumerateNodesAsync(pass2))
+            {
+                nodeCount++;
+
+                if (string.IsNullOrEmpty(node.NodeId))
+                {
+                    report.Add(Finding.Error(
+                        $"Node with BrowseName='{node.BrowseName}' has no NodeId attribute",
+                        "Part 3, §5.2.1"));
+                    continue;
+                }
+
+                if (!seenNodeIds.Add(node.NodeId))
+                {
+                    report.Add(Finding.Error(
+                        $"Duplicate NodeId: {node.NodeId} (BrowseName='{node.BrowseName}')",
+                        "Part 3, §5.2.1"));
+                }
+
+                if (string.IsNullOrEmpty(node.BrowseName))
+                {
+                    report.Add(Finding.Error(
+                        $"Node {node.NodeId} has no BrowseName attribute",
+                        "Part 3, §5.2"));
+                }
+
+                var stripped = NodeSetXmlReader.StripNsPrefix(node.BrowseName);
+                ValidateNaming(stripped, node.NodeClass, node.NodeId, report);
+                ValidateReferences(node, stripped, header.Aliases, report);
+                ValidateModellingRules(node, stripped, report);
+                ValidateDataTypeUsage(node, stripped, report);
+            }
+
+            return RenderReport(report, nodeCount, header);
+        }
+        catch (NodeSetLoadException ex)
+        {
+            return $"❌ {ex.Message}";
+        }
+        catch (System.Xml.XmlException ex)
         {
             return $"❌ Failed to parse XML: {ex.Message}";
         }
-
-        var root = xdoc.Root;
-        if (root == null || root.Name.LocalName != "UANodeSet")
-        {
-            return "❌ Root element must be <UANodeSet> with namespace http://opcfoundation.org/UA/2011/03/UANodeSet.xsd";
-        }
-
-        // Collect namespaces
-        var namespaceUris = root.Element(Ns + "NamespaceUris")?
-            .Elements(Ns + "Uri").Select(e => e.Value).ToList() ?? [];
-
-        // Collect aliases
-        var aliases = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var alias in root.Element(Ns + "Aliases")?.Elements(Ns + "Alias") ?? [])
-        {
-            var name = alias.Attribute("Alias")?.Value;
-            var value = alias.Value.Trim();
-            if (name != null) aliases[name] = value;
-        }
-
-        // §2.5 NamespaceUri conventions
-        ValidateNamespaceUris(namespaceUris, report);
-
-        // Collect all nodes
-        var nodes = new List<(XElement el, string nodeClass, string nodeId, string browseName)>();
-        var nodeIds = new HashSet<string>(StringComparer.Ordinal);
-        var browseNamesByClass = new Dictionary<string, List<string>>();
-
-        foreach (var el in root.Elements())
-        {
-            var localName = el.Name.LocalName;
-            if (!ValidNodeElements.Contains(localName)) continue;
-
-            var nodeId = el.Attribute("NodeId")?.Value ?? "";
-            var browseName = el.Attribute("BrowseName")?.Value ?? "";
-
-            // Check for missing NodeId
-            if (string.IsNullOrEmpty(nodeId))
-            {
-                report.Add(Finding.Error($"Node with BrowseName='{browseName}' has no NodeId attribute",
-                    "Part 3, §5.2.1"));
-                continue;
-            }
-
-            // Check for duplicate NodeIds
-            if (!nodeIds.Add(nodeId))
-            {
-                report.Add(Finding.Error($"Duplicate NodeId: {nodeId} (BrowseName='{browseName}')",
-                    "Part 3, §5.2.1"));
-            }
-
-            // Check for missing BrowseName
-            if (string.IsNullOrEmpty(browseName))
-            {
-                report.Add(Finding.Error($"Node {nodeId} has no BrowseName attribute",
-                    "Part 3, §5.2"));
-            }
-
-            nodes.Add((el, localName, nodeId, StripNsPrefix(browseName)));
-
-            if (!browseNamesByClass.TryGetValue(localName, out var list))
-            {
-                list = [];
-                browseNamesByClass[localName] = list;
-            }
-            list.Add(StripNsPrefix(browseName));
-        }
-
-        // Validate each node
-        foreach (var (el, nodeClass, nodeId, browseName) in nodes)
-        {
-            ValidateNaming(browseName, nodeClass, nodeId, report);
-            ValidateReferences(el, nodeClass, nodeId, browseName, aliases, report);
-            ValidateModellingRules(el, nodeClass, nodeId, browseName, report);
-            ValidateDataTypeUsage(el, nodeClass, nodeId, browseName, report);
-        }
-
-        // Summary stats
-        var sb = new StringBuilder();
-        var errors = report.Count(f => f.Severity == "ERROR");
-        var warnings = report.Count(f => f.Severity == "WARNING");
-        var infos = report.Count(f => f.Severity == "INFO");
-
-        sb.AppendLine($"## NodeSet Validation Report");
-        sb.AppendLine();
-        sb.AppendLine($"Nodes analyzed: {nodes.Count}");
-        sb.AppendLine($"Namespace URIs: {namespaceUris.Count}");
-        sb.AppendLine($"Aliases: {aliases.Count}");
-        sb.AppendLine();
-        sb.AppendLine($"**{errors} errors, {warnings} warnings, {infos} info**");
-        sb.AppendLine();
-
-        if (errors == 0 && warnings == 0)
-        {
-            sb.AppendLine("✅ No issues found. The NodeSet appears well-formed and follows best practices.");
-        }
-        else
-        {
-            foreach (var group in report.GroupBy(f => f.Severity).OrderBy(g => g.Key))
-            {
-                sb.AppendLine($"### {group.Key}s ({group.Count()})");
-                sb.AppendLine();
-                foreach (var f in group)
-                {
-                    sb.AppendLine($"- {f.Message}");
-                    if (!string.IsNullOrEmpty(f.SpecRef))
-                        sb.AppendLine($"  📖 {f.SpecRef}");
-                }
-                sb.AppendLine();
-            }
-        }
-
-        return sb.ToString();
     }
 
     static void ValidateNamespaceUris(List<string> uris, List<Finding> report)
@@ -217,109 +169,123 @@ static class ValidateNodeSetTool
         }
     }
 
-    static void ValidateReferences(XElement el, string nodeClass, string nodeId,
-        string browseName, Dictionary<string, string> aliases, List<Finding> report)
+    static void ValidateReferences(
+        NodeRecord node, string browseName, Dictionary<string, string> aliases, List<Finding> report)
     {
-        var refs = el.Element(Ns + "References")?.Elements(Ns + "Reference") ?? [];
         bool hasSubtype = false;
         bool hasModellingRule = false;
-        int componentCount = 0, propertyCount = 0;
 
-        foreach (var r in refs)
+        foreach (var r in node.References)
         {
-            var refType = r.Attribute("ReferenceType")?.Value ?? "";
-            var isForward = r.Attribute("IsForward")?.Value;
-
-            // Resolve alias
+            var refType = r.ReferenceType;
             if (aliases.TryGetValue(refType, out var resolved))
                 refType = resolved;
 
-            // Track reference types
-            if (refType is "HasSubtype" or "i=45" or "ns=0;i=45" && isForward != "true")
+            if (refType is "HasSubtype" or "i=45" or "ns=0;i=45" && r.IsForward != "true")
                 hasSubtype = true;
             if (refType is "HasModellingRule" or "i=37" or "ns=0;i=37")
                 hasModellingRule = true;
-            if (refType is "HasComponent" or "i=47" or "ns=0;i=47" && isForward == "true")
-                componentCount++;
-            if (refType is "HasProperty" or "i=46" or "ns=0;i=46" && isForward == "true")
-                propertyCount++;
         }
 
-        // Types should have a HasSubtype reference (except root types)
-        if (nodeClass is "UAObjectType" or "UAVariableType" or "UADataType" or "UAReferenceType"
+        if (node.NodeClass is "UAObjectType" or "UAVariableType" or "UADataType" or "UAReferenceType"
             && !hasSubtype)
         {
             report.Add(Finding.Warning(
-                $"{nodeClass} '{browseName}' ({nodeId}) has no HasSubtype inverse reference. It should derive from a base type.",
+                $"{node.NodeClass} '{browseName}' ({node.NodeId}) has no HasSubtype inverse reference. It should derive from a base type.",
                 "Part 3, §5.8"));
         }
 
-        // Instance declarations should have ModellingRule
-        if (nodeClass is "UAObject" or "UAVariable" or "UAMethod")
-        {
-            var parentNodeId = el.Attribute("ParentNodeId")?.Value;
-            if (parentNodeId != null && !hasModellingRule)
-            {
-                report.Add(Finding.Warning(
-                    $"Instance '{browseName}' ({nodeId}) has ParentNodeId but no ModellingRule reference.",
-                    "Part 3, §6.2.6"));
-            }
-        }
-    }
-
-    static void ValidateModellingRules(XElement el, string nodeClass, string nodeId,
-        string browseName, List<Finding> report)
-    {
-        // Check that ObjectTypes have at least one member
-        if (nodeClass == "UAObjectType")
-        {
-            var refs = el.Element(Ns + "References")?.Elements(Ns + "Reference") ?? [];
-            var forwardMembers = refs.Count(r =>
-            {
-                var rt = r.Attribute("ReferenceType")?.Value ?? "";
-                var isForward = r.Attribute("IsForward")?.Value;
-                return isForward == "true" &&
-                    rt is "HasComponent" or "HasProperty" or "HasOrderedComponent"
-                        or "i=47" or "i=46" or "i=49";
-            });
-
-            if (forwardMembers == 0)
-            {
-                report.Add(Finding.Info(
-                    $"ObjectType '{browseName}' ({nodeId}) has no declared components/properties. Consider if this is intentional.",
-                    "OPC 11030, §7.2"));
-            }
-        }
-    }
-
-    static void ValidateDataTypeUsage(XElement el, string nodeClass, string nodeId,
-        string browseName, List<Finding> report)
-    {
-        if (nodeClass != "UAVariable") return;
-
-        var dataType = el.Attribute("DataType")?.Value ?? "";
-
-        // Warn about using generic Structure/BaseDataType
-        if (dataType is "i=22" or "ns=0;i=22")
+        if (node.NodeClass is "UAObject" or "UAVariable" or "UAMethod"
+            && node.ParentNodeId != null && !hasModellingRule)
         {
             report.Add(Finding.Warning(
-                $"Variable '{browseName}' ({nodeId}) uses generic 'Structure' DataType. Consider using a more specific concrete type.",
+                $"Instance '{browseName}' ({node.NodeId}) has ParentNodeId but no ModellingRule reference.",
+                "Part 3, §6.2.6"));
+        }
+    }
+
+    static void ValidateModellingRules(NodeRecord node, string browseName, List<Finding> report)
+    {
+        if (node.NodeClass != "UAObjectType") return;
+
+        var forwardMembers = 0;
+        foreach (var r in node.References)
+        {
+            if (r.IsForward == "true" &&
+                r.ReferenceType is "HasComponent" or "HasProperty" or "HasOrderedComponent"
+                    or "i=47" or "i=46" or "i=49")
+            {
+                forwardMembers++;
+            }
+        }
+
+        if (forwardMembers == 0)
+        {
+            report.Add(Finding.Info(
+                $"ObjectType '{browseName}' ({node.NodeId}) has no declared components/properties. Consider if this is intentional.",
+                "OPC 11030, §7.2"));
+        }
+    }
+
+    static void ValidateDataTypeUsage(NodeRecord node, string browseName, List<Finding> report)
+    {
+        if (node.NodeClass != "UAVariable") return;
+
+        // Warn about using generic Structure/BaseDataType
+        if (node.DataType is "i=22" or "ns=0;i=22")
+        {
+            report.Add(Finding.Warning(
+                $"Variable '{browseName}' ({node.NodeId}) uses generic 'Structure' DataType. Consider using a more specific concrete type.",
                 "OPC 11030, §7.5"));
         }
 
-        if (dataType is "i=24" or "ns=0;i=24")
+        if (node.DataType is "i=24" or "ns=0;i=24")
         {
             report.Add(Finding.Warning(
-                $"Variable '{browseName}' ({nodeId}) uses 'BaseDataType'. Consider using a more specific type.",
+                $"Variable '{browseName}' ({node.NodeId}) uses 'BaseDataType'. Consider using a more specific type.",
                 "Part 3, §5.8.3"));
         }
     }
 
-    static string StripNsPrefix(string browseName)
+    static string RenderReport(List<Finding> report, int nodeCount, NodeSetHeader header)
     {
-        var idx = browseName.IndexOf(':');
-        return idx >= 0 && idx < 4 && int.TryParse(browseName[..idx], out _)
-            ? browseName[(idx + 1)..] : browseName;
+        var sb = new StringBuilder();
+        var errors = report.Count(f => f.Severity == "ERROR");
+        var warnings = report.Count(f => f.Severity == "WARNING");
+        var infos = report.Count(f => f.Severity == "INFO");
+
+        sb.AppendLine($"## NodeSet Validation Report");
+        sb.AppendLine();
+        sb.AppendLine($"Nodes analyzed: {nodeCount}");
+        sb.AppendLine($"Namespace URIs: {header.NamespaceUris.Count}");
+        sb.AppendLine($"Aliases: {header.Aliases.Count}");
+        sb.AppendLine();
+        sb.AppendLine($"**{errors} errors, {warnings} warnings, {infos} info**");
+        sb.AppendLine();
+
+        if (errors == 0 && warnings == 0)
+        {
+            sb.AppendLine("✅ No issues found. The NodeSet appears well-formed and follows best practices.");
+        }
+        else
+        {
+            foreach (var group in report.GroupBy(f => f.Severity).OrderBy(g => g.Key))
+            {
+                sb.AppendLine($"### {group.Key}s ({group.Count()})");
+                sb.AppendLine();
+                foreach (var f in group.Take(100))
+                {
+                    sb.AppendLine($"- {f.Message}");
+                    if (!string.IsNullOrEmpty(f.SpecRef))
+                        sb.AppendLine($"  📖 {f.SpecRef}");
+                }
+                if (group.Count() > 100)
+                    sb.AppendLine($"  ... and {group.Count() - 100} more {group.Key} findings");
+                sb.AppendLine();
+            }
+        }
+
+        return sb.ToString();
     }
 
     sealed class Finding

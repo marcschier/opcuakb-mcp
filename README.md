@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-purple)](https://dotnet.microsoft.com/download/dotnet/10.0)
 [![MCP](https://img.shields.io/badge/MCP-1.2-green)](https://modelcontextprotocol.io)
-[![Version](https://img.shields.io/badge/version-4.0-orange)](version.json)
+[![Version](https://img.shields.io/badge/version-4.1-orange)](version.json)
 
 <br clear="left"/>
 
@@ -107,7 +107,7 @@ The MCP server exposes 11 tools — structured search, RAG Q&A, compliance valid
 <tr>
 <td width="50%" valign="top">
 
-**`validate_nodeset`** — Validate NodeSet XML against OPC UA standard and OPC 11030 best practices — checks naming conventions, modelling rules, type hierarchy, reference types.
+**`validate_nodeset`** — Validate NodeSet XML against OPC UA standard and OPC 11030 best practices — checks naming conventions, modelling rules, type hierarchy, reference types. Streaming parser; accepts inline XML (≤30 KB), `blob:` refs, or allow-listed `https://` URLs.
 
 </td>
 <td width="50%" valign="top">
@@ -119,7 +119,7 @@ The MCP server exposes 11 tools — structured search, RAG Q&A, compliance valid
 <tr>
 <td valign="top">
 
-**`check_compliance`** — Check a NodeSet implementation against a companion spec — finds missing mandatory/optional nodes, data type mismatches.
+**`check_compliance`** — Check a NodeSet implementation against a companion spec — finds missing mandatory/optional nodes, data type mismatches. Same three input modes as `validate_nodeset` (inline / `blob:` ref / `https://` URL).
 
 </td>
 <td valign="top">

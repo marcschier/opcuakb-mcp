@@ -34,6 +34,29 @@ SEARCH_API_KEY=<your-search-api-key> ./scripts/install-mcp.sh hosted
 SEARCH_API_KEY=<your-search-api-key> ./scripts/install-mcp.sh local
 ```
 
+## NodeSet upload
+
+For NodeSets too large to inline in a tool call (anything over ~30 KB), use the `/upload-nodeset` endpoint and pass the returned `nodeset_ref` to `validate_nodeset` or `check_compliance`:
+
+```bash
+# Raw XML body
+curl -X POST \
+  -H "api-key: $MCP_API_KEY" \
+  -H "Content-Type: application/xml" \
+  --data-binary @MyNodeSet.xml \
+  https://<mcp-server-fqdn>/upload-nodeset
+
+# Or multipart/form-data with a `file` part
+curl -X POST \
+  -H "api-key: $MCP_API_KEY" \
+  -F "file=@MyNodeSet.xml" \
+  https://<mcp-server-fqdn>/upload-nodeset
+
+# Response: { "nodeset_ref": "blob:uploads/{sha256}.xml", "size_bytes": N, "sha256": "..." }
+```
+
+The endpoint requires the `api-key` header (no anonymous writes — even when `MCP_REQUIRE_AUTH=false`). Uploads are content-addressed by sha256 and auto-deleted by the storage account's lifecycle policy after 1 day.
+
 ## Agent Deployment Scripts
 
 ### `install-toolbox-and-agent.ps1` (PowerShell) — *legacy*
@@ -153,7 +176,8 @@ dotnet run --project src/OpcUaKb.McpServer -- --stdio
 | `AOAI_API_KEY` | | AOAI key auth (if not using Managed Identity / `az login`) |
 | `KB_NAME` | | Knowledge base name (default: `opcua-kb`) |
 | `GPT_DEPLOYMENT` | | GPT model deployment name (default: `gpt-4o`) |
-| `MCP_API_KEY` | | API key for authenticated access (defaults to `SEARCH_API_KEY`) |
+| `MCP_API_KEY` | | API key for authenticated access (defaults to `SEARCH_API_KEY` for read tools; `/upload-nodeset` uses this key explicitly and does not fall back to `SEARCH_API_KEY`) |
+| `MCP_UPLOAD_KEY` | | Separate api-key for `POST /upload-nodeset`. Defaults to `MCP_API_KEY`. |
 | `MCP_REQUIRE_AUTH` | | Set `true` to reject anonymous requests |
 | `MCP_ANON_RATE_LIMIT` | | Max requests/min for anonymous callers (default: 10) |
 | `MCP_AUTH_RATE_LIMIT` | | Max requests/min for authenticated callers (default: 0 = unlimited) |
