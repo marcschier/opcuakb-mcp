@@ -12,7 +12,7 @@ warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 fail()  { echo -e "${RED}[FAIL]${NC}  $*"; exit 1; }
 
 # ── Configuration ─────────────────────────────────────────────────────
-MCP_SERVER_URL="https://opcua-kb-mcp-server.salmonfield-436bb4c2.eastus.azurecontainerapps.io/"
+MCP_SERVER_URL="https://opcua-kb-sc-mcp-server-v2.ashyglacier-fe56ba7c.swedencentral.azurecontainerapps.io/"
 KB_MCP_URL="https://opcua-kb-search.search.windows.net/knowledgebases/opcua-kb/mcp?api-version=2025-11-01-preview"
 SEARCH_ENDPOINT="https://opcua-kb-search.search.windows.net"
 API_KEY="${SEARCH_API_KEY:-}"

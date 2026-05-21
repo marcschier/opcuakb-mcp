@@ -10,7 +10,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$McpServerUrl = "https://opcua-kb-mcp-server.salmonfield-436bb4c2.eastus.azurecontainerapps.io/"
+$McpServerUrl = "https://opcua-kb-sc-mcp-server-v2.ashyglacier-fe56ba7c.swedencentral.azurecontainerapps.io/"
 $KbMcpUrl = "https://opcua-kb-search.search.windows.net/knowledgebases/opcua-kb/mcp?api-version=2025-11-01-preview"
 $SearchEndpoint = "https://opcua-kb-search.search.windows.net"
 

@@ -1,7 +1,7 @@
 {
   "name": "opcua-kb-mcp",
-  "version": "2.1.0",
-  "description": "OPC UA Knowledge Base MCP Server — search specs, validate NodeSets, check compliance, and get modelling guidance for all OPC UA specifications and companion specs.",
+  "version": "4.2.0",
+  "description": "OPC UA Knowledge Base MCP Server — 11 tools: structured search, RAG Q&A, validate/compliance/compare NodeSets, and modelling guidance for all OPC UA specifications and companion specs.",
   "publisher": "marcschier",
   "repository": "https://github.com/marcschier/OpcUaKb",
   "tools": [
@@ -22,12 +22,20 @@
       "description": "Full-text search across OPC UA specification HTML pages and tables. Version-aware."
     },
     {
+      "name": "search_docs_rag",
+      "description": "RAG Q&A grounded by the OPC UA spec corpus (KB retrieve + GPT-4o)."
+    },
+    {
       "name": "count_nodes",
       "description": "Faceted aggregation by node_class, spec_part, modelling_rule, or data_type."
     },
     {
+      "name": "list_specs",
+      "description": "Ranked catalog of all indexed companion specs and CloudLib NodeSets."
+    },
+    {
       "name": "validate_nodeset",
-      "description": "Validate NodeSet XML against OPC UA standard and OPC 11030 best practices."
+      "description": "Validate NodeSet XML (inline ≤30KB, blob: ref, or https URL) against OPC UA + OPC 11030 best practices."
     },
     {
       "name": "compare_versions",
@@ -35,7 +43,7 @@
     },
     {
       "name": "check_compliance",
-      "description": "Check a NodeSet implementation against a companion spec for compliance."
+      "description": "Check a NodeSet implementation (inline, blob: ref, or https URL) against a companion spec."
     },
     {
       "name": "suggest_model",
@@ -52,7 +60,7 @@
       }
     },
     "http": {
-      "url": "https://opcua-kb-mcp-server.salmonfield-436bb4c2.eastus.azurecontainerapps.io/",
+      "url": "https://opcua-kb-sc-mcp-server-v2.ashyglacier-fe56ba7c.swedencentral.azurecontainerapps.io/",
       "headers": {
         "api-key": { "description": "Search API key for authentication", "required": true }
       }
