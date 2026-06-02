@@ -207,8 +207,9 @@ The agent uses `DefaultAzureCredential` so a fresh `az login` (or `azd auth logi
 
 ```bash
 cd src/OpcUaKb.HostedAgent
-azd env new opcua-kb-w3
+azd env new opcua-kb
 azd env set AZURE_LOCATION westus3
+azd env set AZURE_RESOURCE_GROUP rg-opcua-kb
 azd env set ENABLE_HOSTED_AGENTS true
 azd env set MCP_SERVER_URL https://<mcp-server-fqdn>/
 azd provision           # creates Foundry account, project, ACR, gpt-4o

@@ -49,10 +49,10 @@ Foundry Hosted Agents are in preview and only available in select regions
 Sweden Central, East US, and many other regions return
 `"Unsupported region for Foundry Hosted Agents"` on `azd deploy`.
 
-Practical setup: keep Search + Storage + MCP server in your preferred core
-region (e.g., swedencentral) and put the Hosted Agent's Foundry account in
-a supported region (e.g., westus3). The agent calls the MCP server
-cross-region over HTTPS — latency is dominated by the AOAI call anyway.
+Recommended setup: colocate KB stack (Search, Storage, MCP server) **and** the
+Hosted Agent's Foundry project in the same Hosted-Agent-supported region —
+typically **westus3** under a single `rg-opcua-kb` resource group. The agent
+calls the MCP server in-region over HTTPS.
 
 ## Local development
 
@@ -61,8 +61,9 @@ cross-region over HTTPS — latency is dominated by the AOAI call anyway.
 azd ai agent init
 
 # Provision Foundry resources in a Hosted-Agent-capable region
-azd env new opcua-kb-w3
+azd env new opcua-kb
 azd env set AZURE_LOCATION westus3
+azd env set AZURE_RESOURCE_GROUP rg-opcua-kb
 azd env set ENABLE_HOSTED_AGENTS true
 azd env set MCP_SERVER_URL https://<your-mcp-server-fqdn>/
 azd env set AZURE_TENANT_ID <your-tenant-id>

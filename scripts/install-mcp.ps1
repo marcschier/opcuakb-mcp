@@ -10,8 +10,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$McpServerUrl = "https://opcua-kb-sc-mcp-server-v2.ashyglacier-fe56ba7c.swedencentral.azurecontainerapps.io/"
-$KbMcpUrl = "https://opcua-kb-search.search.windows.net/knowledgebases/opcua-kb/mcp?api-version=2025-11-01-preview"
+$McpServerUrl = "https://opcua-kb-mcp-server.lemoncliff-5369bab2.westus3.azurecontainerapps.io/"
+$KbMcpUrl = "https://opcua-kb-search.search.windows.net/knowledgebases/opcua-kb-kb/mcp?api-version=2025-11-01-preview"
 $SearchEndpoint = "https://opcua-kb-search.search.windows.net"
 
 if ([string]::IsNullOrEmpty($ApiKey)) {

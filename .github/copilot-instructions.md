@@ -20,7 +20,7 @@ azd ai agent run --cwd src/OpcUaKb.HostedAgent
 az bicep build --file infra/main.bicep
 
 # Deploy KB infrastructure (idempotent)
-./infra/deploy.sh -s <subscription-id> -g rg-opcua-kb -p opcua-kb -l swedencentral
+./infra/deploy.sh -s <subscription-id> -g rg-opcua-kb -p opcua-kb -l westus3
 
 # Deploy Hosted Agent (requires a Hosted-Agent-supported region, e.g. westus3)
 cd src/OpcUaKb.HostedAgent && azd provision && azd deploy
@@ -35,7 +35,7 @@ There are no unit tests — `OpcUaKb.Test` is a console app requiring live Azure
 - **MCP Server** (`OpcUaKb.McpServer`): Custom MCP server with 11 tools (search_nodes, get_type_hierarchy, get_spec_summary, search_docs, search_docs_rag, count_nodes, list_specs, compare_versions, suggest_model, check_compliance, validate_nodeset). Uses `ModelContextProtocol` SDK with HTTP SSE (default) + stdio (`--stdio`) transports.
 - **Hosted Agent** (`OpcUaKb.HostedAgent`): Foundry Hosted Agent using Microsoft Agent Framework + Responses protocol. Connects **directly** to `OpcUaKb.McpServer` via `ModelContextProtocol.Client` (`HttpClientTransport` + `McpClient.CreateAsync` + `ListToolsAsync`) so each of the 11 MCP tools is exposed as a distinct `McpClientTool` (`AIFunction`). Deployed via `azd deploy` (after `azd ai agent init` + `azd provision`); replaces the legacy Bot Framework custom engine agent. **Does NOT use a Foundry Toolbox** — earlier `GetToolboxToolsAsync` approach wrapped tools into one opaque `McpTool` invisible to GPT-4o.
 - **Infrastructure**: `infra/main.bicep` (Azure resources) + `infra/deploy.sh`. The Foundry-side Hosted Agent is NOT in Bicep; it's provisioned by `azd provision` / `azd deploy` from `src/OpcUaKb.HostedAgent/agent.manifest.yaml`.
-- **Region split**: Foundry Hosted Agents are preview-only in select regions (westus3, westus, norwayeast, francecentral, japaneast). The KB infrastructure (Search, Storage, MCP server, pipeline job) can be in any region. Current production: KB in **swedencentral** + Hosted Agent project in **westus3**.
+- **Region**: All resources colocated in **westus3** (the KB stack co-located with the Foundry Hosted Agent, which is preview-restricted to westus3, westus, norwayeast, francecentral, japaneast).
 - **Index**: Azure AI Search `opcua-content-index-v2` (current). Legacy `opcua-content-index` (v1) is preserved for back-compat tools. `content_type` distinguishes `spec_section` (v2 per-section docs), `nodeset`, `nodeset_summary`, `nodeset_hierarchy`, `cloudlib_*`, and legacy `text`/`table`/`diagram`.
 - **v2 structured fields**: `spec_id`, `spec_title`, `section_id`, `section_number`, `section_path`, `breadcrumb` (Collection), `figures` (Collection), `publication_date`. Doc key = `Base64Url("{spec_id}|{version}|{section_slug or section_number}")` — Azure Search rejects `/` and `.` in keys.
 - **NodeSet structured fields**: `node_class`, `modelling_rule`, `browse_name`, `parent_type`, `data_type` for structured queries
@@ -56,9 +56,7 @@ These are the **production values** — do not revert to lower defaults:
 | GPT-4o capacity | `30` | |
 | Container Apps Job timeout | `86400` (24 hours) | Full crawl + index takes ~17 hours |
 | Cron schedule | `0 2 * * 0` | Weekly Sunday 2am UTC |
-| KB resource group | `rg-opcua-kb` | Current production region: **swedencentral** |
-| Hosted Agent resource group | `rg-opcua-kb-w3` | Hosted Agent in **westus3** (preview region constraint) |
-| KB retrieval reasoning | `medium` | Upgraded from low for better query planning |
+| KB resource group | `rg-opcua-kb` | Current production region: **westus3** (KB + Hosted Agent colocated) |
 | Storage auth | Managed Identity only | `allowSharedKeyAccess: false` |
 
 ## HttpClient Usage — Critical Pattern

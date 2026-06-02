@@ -111,7 +111,7 @@ az search admin-key show --service-name <prefix>-search --resource-group <rg> --
 ```bash
 az deployment group create --resource-group <rg> \
   --template-file infra/main.bicep \
-  --parameters prefix=<prefix> location=swedencentral \
+  --parameters prefix=<prefix> location=westus3 \
     pipelineImage=<acr-login-server>/<prefix>-pipeline:latest
 ```
 

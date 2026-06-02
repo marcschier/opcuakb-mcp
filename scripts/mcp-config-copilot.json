@@ -3,7 +3,7 @@
   "mcpServers": {
     "opcua-kb-tools": {
       "type": "http",
-      "url": "https://opcua-kb-sc-mcp-server-v2.ashyglacier-fe56ba7c.swedencentral.azurecontainerapps.io/",
+      "url": "https://opcua-kb-mcp-server.lemoncliff-5369bab2.westus3.azurecontainerapps.io/",
       "headers": {
         "api-key": "REPLACE_WITH_SEARCH_API_KEY"
       }

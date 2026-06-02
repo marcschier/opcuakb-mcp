@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.36.1.42791",
-      "templateHash": "18255042781201832232"
+      "templateHash": "13382740053781718936"
     }
   },
   "parameters": {
@@ -64,7 +64,7 @@
       "type": "bool",
       "defaultValue": false,
       "metadata": {
-        "description": "When true, set storage publicNetworkAccess=Disabled and require VNet/private-endpoint access only. Must already have the v2 Container Apps environment + private endpoint provisioned and validated before flipping this on, otherwise the v1 apps lose all storage access."
+        "description": "When true, set storage publicNetworkAccess=Disabled and require VNet/private-endpoint access only. Toggle on after the first pipeline run has validated the deployment end-to-end."
       }
     }
   },
@@ -74,9 +74,9 @@
     "storageName": "[take(replace(format('{0}storage', parameters('prefix')), '-', ''), 24)]",
     "docaiName": "[format('{0}-docai', parameters('prefix'))]",
     "acrName": "[replace(format('{0}registry', parameters('prefix')), '-', '')]",
-    "envName": "[format('{0}-env-v2', parameters('prefix'))]",
-    "jobName": "[format('{0}-pipeline-job-v2', parameters('prefix'))]",
-    "mcpAppName": "[format('{0}-mcp-server-v2', parameters('prefix'))]",
+    "envName": "[format('{0}-env', parameters('prefix'))]",
+    "jobName": "[format('{0}-pipeline-job', parameters('prefix'))]",
+    "mcpAppName": "[format('{0}-mcp-server', parameters('prefix'))]",
     "logAnalyticsName": "[format('{0}-logs', parameters('prefix'))]",
     "workbookName": "[guid(resourceGroup().id, 'opcua-pipeline-dashboard')]",
     "vnetName": "[format('{0}-vnet', parameters('prefix'))]",

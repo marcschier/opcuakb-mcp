@@ -1,6 +1,6 @@
 {
   "name": "opcua-kb-mcp",
-  "version": "4.2.0",
+  "version": "4.3.0",
   "description": "OPC UA Knowledge Base MCP Server — 11 tools: structured search, RAG Q&A, validate/compliance/compare NodeSets, and modelling guidance for all OPC UA specifications and companion specs.",
   "publisher": "marcschier",
   "repository": "https://github.com/marcschier/OpcUaKb",
@@ -60,7 +60,7 @@
       }
     },
     "http": {
-      "url": "https://opcua-kb-sc-mcp-server-v2.ashyglacier-fe56ba7c.swedencentral.azurecontainerapps.io/",
+      "url": "https://opcua-kb-mcp-server.lemoncliff-5369bab2.westus3.azurecontainerapps.io/",
       "headers": {
         "api-key": { "description": "Search API key for authentication", "required": true }
       }

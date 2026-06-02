@@ -181,13 +181,14 @@ https://<mcp-server-fqdn>/
 
 A **Foundry Hosted Agent** (`src/OpcUaKb.HostedAgent/`) lets you use the OPC UA Knowledge Base inside **Microsoft Teams** and **Microsoft 365 Copilot** as a conversational bot. It runs on Azure AI Foundry's managed agent runtime using the Responses protocol and connects directly to `OpcUaKb.McpServer` via `ModelContextProtocol.Client` — each MCP tool is exposed as a distinct `AIFunction` so GPT-4o can pick by name.
 
-> **Region constraint** — Foundry Hosted Agents are in preview and only available in select regions (e.g., **westus3**, westus, norwayeast, francecentral, japaneast). The core knowledge base (Search, Storage, MCP server, pipeline job) can live anywhere; the Hosted Agent project just needs to be in a supported region and calls the MCP server cross-region over HTTPS.
+> **Region** — Foundry Hosted Agents are in preview and only available in select regions (**westus3**, westus, norwayeast, francecentral, japaneast). The recommended deployment colocates KB + Hosted Agent in **westus3** under a single `rg-opcua-kb` resource group.
 
 ```bash
-# Provision Foundry + deploy hosted agent in a supported region
+# Provision Foundry + deploy hosted agent in the same RG as the KB
 cd src/OpcUaKb.HostedAgent
-azd env new opcua-kb-w3
+azd env new opcua-kb
 azd env set AZURE_LOCATION westus3
+azd env set AZURE_RESOURCE_GROUP rg-opcua-kb
 azd env set ENABLE_HOSTED_AGENTS true
 azd env set MCP_SERVER_URL https://<your-mcp-server-fqdn>/
 azd provision

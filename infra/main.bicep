@@ -28,7 +28,7 @@ param cloudLibUsername string = ''
 @secure()
 param cloudLibPassword string = ''
 
-@description('When true, set storage publicNetworkAccess=Disabled and require VNet/private-endpoint access only. Must already have the v2 Container Apps environment + private endpoint provisioned and validated before flipping this on, otherwise the v1 apps lose all storage access.')
+@description('When true, set storage publicNetworkAccess=Disabled and require VNet/private-endpoint access only. Toggle on after the first pipeline run has validated the deployment end-to-end.')
 param lockdownStorage bool = false
 
 // ── Derived names ────────────────────────────────────────────────────
@@ -37,13 +37,13 @@ var foundryName = '${prefix}-foundry'
 var storageName = take(replace('${prefix}storage', '-', ''), 24)
 var docaiName = '${prefix}-docai'
 var acrName = replace('${prefix}registry', '-', '')
-var envName = '${prefix}-env-v2'
-var jobName = '${prefix}-pipeline-job-v2'
-var mcpAppName = '${prefix}-mcp-server-v2'
+var envName = '${prefix}-env'
+var jobName = '${prefix}-pipeline-job'
+var mcpAppName = '${prefix}-mcp-server'
 var logAnalyticsName = '${prefix}-logs'
 var workbookName = guid(resourceGroup().id, 'opcua-pipeline-dashboard')
 
-// ── VNet sizing for v2 (workload-profile env + private endpoint) ─────
+// ── VNet sizing for workload-profile env + private endpoint ──────────
 // 10.20.0.0/24 = 256 IPs total:
 //   apps-subnet  10.20.0.0/26     (64 IPs)  ── Microsoft.App workload-profile env
 //   pe-subnet    10.20.0.64/28    (16 IPs)  ── private endpoint NICs
@@ -157,13 +157,11 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     supportsHttpsTrafficOnly: true
     allowSharedKeyAccess: false
     defaultToOAuthAuthentication: true
-    // Two-phase rollout: while lockdownStorage=false we keep both v1 and v2
-    // apps able to reach the storage account; the v2 apps already use the
-    // private endpoint via private DNS, but the v1 apps still rely on
-    // public ingress until cutover. When lockdownStorage=true, public
-    // access is fully off — only private-endpoint traffic is accepted, and
-    // every request still has to be a valid Entra token from a principal
-    // holding Storage Blob Data Contributor.
+    // Storage uses managed identity only (allowSharedKeyAccess=false).
+    // When lockdownStorage=true, public network access is fully off — only
+    // private-endpoint traffic via the VNet is accepted, and every request
+    // must still carry a valid Entra token for a principal holding
+    // Storage Blob Data Contributor.
     publicNetworkAccess: lockdownStorage ? 'Disabled' : 'Enabled'
     networkAcls: lockdownStorage ? {
       defaultAction: 'Deny'
@@ -179,7 +177,7 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   }
 }
 
-// ── 3a. VNet + subnets for the v2 workload-profile environment ──────
+// ── 3a. VNet + subnets for the workload-profile environment ─────────
 resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = {
   name: vnetName
   location: location

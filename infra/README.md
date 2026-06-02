@@ -10,18 +10,18 @@ All Azure resources are defined in [`main.bicep`](main.bicep) and deployed via [
 | Azure AI Foundry | `{prefix}-foundry` | AIServices account + default project; GPT-4o (30 TPM) + text-embedding-3-large (120 TPM). MI auth. |
 | Blob Storage | `{prefix}storage` | Crawled content storage. **MI-only auth** (`allowSharedKeyAccess: false`), **publicNetworkAccess: Disabled** with `networkAcls.defaultAction: Deny` — reachable only through the VNet's private endpoint. |
 | Container Registry | `{prefix}registry` | Pipeline + MCP server Docker images |
-| Container Apps Environment | `{prefix}-env-v2` | Workload-profile env (Consumption profile) with VNet integration via `apps-subnet`. |
+| Container Apps Environment | `{prefix}-env` | Workload-profile env (Consumption profile) with VNet integration via `apps-subnet`. |
 | VNet | `{prefix}-vnet` | `10.20.0.0/24`. `apps-subnet` /26 (delegated to `Microsoft.App/environments`), `pe-subnet` /28 (privateEndpointNetworkPolicies Disabled). |
 | Private DNS zone | `privatelink.blob.core.windows.net` | Linked to the VNet; resolves the storage account's blob endpoint to the PE private IP for any VNet client. |
 | Private endpoint | `{prefix}-storage-pe` | For storage `blob` group. Auto-approved (same subscription). |
-| Container Apps Job | `{prefix}-pipeline-job-v2` | Weekly crawl + index (cron: `0 2 * * 0`, 24h timeout). Runs in the VNet-integrated workload-profile env; writes to storage via private endpoint. System MI + Cognitive Services OpenAI User + Storage Blob Data Contributor. |
-| Container App | `{prefix}-mcp-server-v2` | MCP server with 11 tools + RAG. **Workload-profile env, VNet-integrated.** Reads/writes storage exclusively via private endpoint. System MI + Cognitive Services OpenAI User + Storage Blob Data Contributor. |
+| Container Apps Job | `{prefix}-pipeline-job` | Weekly crawl + index (cron: `0 2 * * 0`, 24h timeout). Runs in the VNet-integrated workload-profile env; writes to storage via private endpoint. System MI + Cognitive Services OpenAI User + Storage Blob Data Contributor. |
+| Container App | `{prefix}-mcp-server` | MCP server with 11 tools + RAG. **Workload-profile env, VNet-integrated.** Reads/writes storage exclusively via private endpoint. System MI + Cognitive Services OpenAI User + Storage Blob Data Contributor. |
 | Log Analytics Workspace | `{prefix}-logs` | Pipeline and MCP server log collection |
 | Azure Monitor Workbook | — | Pipeline dashboard (crawl/index/error tracking) |
 
-> **Note**: The OPC UA Expert agent (`OpcUaKb.HostedAgent`) is **not** in this Bicep — it's a Foundry Hosted Agent provisioned by `azd provision` / `azd deploy` from `src/OpcUaKb.HostedAgent/`. The Hosted Agent connects to the MCP server here over HTTPS via `MCP_SERVER_URL` — no Foundry Toolbox indirection.
+> **Note**: The OPC UA Expert agent (`OpcUaKb.HostedAgent`) is **not** in this Bicep — it's a Foundry Hosted Agent provisioned by `azd provision` / `azd deploy` from `src/OpcUaKb.HostedAgent/`. The Hosted Agent connects to the MCP server here over HTTPS via `MCP_SERVER_URL`.
 >
-> **Region split**: Foundry Hosted Agents are preview-only in select regions (westus3, westus, norwayeast, francecentral, japaneast). The KB infrastructure (this Bicep) can be in any region — typical deployments use **swedencentral** for the KB + **westus3** for the Hosted Agent project.
+> **Region**: Foundry Hosted Agents are preview-only in select regions (westus3, westus, norwayeast, francecentral, japaneast). All KB resources colocate with the Hosted Agent in **westus3** (single region, single resource group `rg-opcua-kb`).
 
 ## Deployment
 
@@ -39,7 +39,7 @@ All Azure resources are defined in [`main.bicep`](main.bicep) and deployed via [
   -s <subscription-id> \
   -g rg-opcua-kb \
   -p opcua-kb \
-  -l swedencentral
+  -l westus3
 ```
 
 | Flag | Description | Default |
@@ -47,7 +47,7 @@ All Azure resources are defined in [`main.bicep`](main.bicep) and deployed via [
 | `-s, --subscription` | Azure subscription ID | (required) |
 | `-g, --resource-group` | Resource group name | `rg-opcua-kb` |
 | `-p, --prefix` | Resource name prefix | `opcua-kb` |
-| `-l, --location` | Azure region | `eastus` (override to `swedencentral` for current production) |
+| `-l, --location` | Azure region | `eastus` (override to `westus3` for production — colocates KB with Foundry Hosted Agent) |
 
 The script is **idempotent** — safe to run multiple times. It performs:
 1. Resource group creation
