@@ -302,7 +302,10 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' = {
     name: 'Basic'
   }
   properties: {
-    adminUserEnabled: true
+    // Local-auth (admin user + password) is disabled. Both the pipeline
+    // job and the MCP server pull images via their system-assigned
+    // managed identities + AcrPull role (see role assignments below).
+    adminUserEnabled: false
   }
 }
 
@@ -367,15 +370,10 @@ resource pipelineJob 'Microsoft.App/jobs@2024-03-01' = {
       registries: [
         {
           server: acr.properties.loginServer
-          username: acr.listCredentials().username
-          passwordSecretRef: 'acr-password'
+          identity: 'system'
         }
       ]
       secrets: concat([
-        {
-          name: 'acr-password'
-          value: acr.listCredentials().passwords[0].value
-        }
         {
           name: 'search-api-key'
           value: search.listAdminKeys().primaryKey
@@ -456,15 +454,10 @@ resource mcpServer 'Microsoft.App/containerApps@2024-03-01' = {
       registries: [
         {
           server: acr.properties.loginServer
-          username: acr.listCredentials().username
-          passwordSecretRef: 'acr-password'
+          identity: 'system'
         }
       ]
       secrets: [
-        {
-          name: 'acr-password'
-          value: acr.listCredentials().passwords[0].value
-        }
         {
           name: 'search-api-key'
           value: search.listAdminKeys().primaryKey
@@ -608,6 +601,34 @@ resource mcpServerStorageBlobContributor 'Microsoft.Authorization/roleAssignment
     principalId: mcpServer.identity.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: storageBlobDataContributorRole
+  }
+}
+
+// AcrPull — both the pipeline job MI and the MCP server MI need to pull
+// images from the registry. Local auth (admin user) is disabled on the
+// ACR, so this role assignment is the ONLY way images can be pulled.
+var acrPullRole = subscriptionResourceId(
+  'Microsoft.Authorization/roleDefinitions',
+  '7f951dda-4ed3-4680-a7ca-43fe172d538d'
+)
+
+resource pipelineJobAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(pipelineJob.id, acr.id, 'AcrPull')
+  scope: acr
+  properties: {
+    principalId: pipelineJob.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: acrPullRole
+  }
+}
+
+resource mcpServerAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(mcpServer.id, acr.id, 'AcrPull')
+  scope: acr
+  properties: {
+    principalId: mcpServer.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: acrPullRole
   }
 }
 
