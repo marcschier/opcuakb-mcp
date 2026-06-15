@@ -90,7 +90,9 @@ resource foundry 'Microsoft.CognitiveServices/accounts@2025-04-01-preview' = {
     customSubDomainName: foundryName
     publicNetworkAccess: 'Enabled'
     allowProjectManagement: true
-    disableLocalAuth: false
+    // Org policy disallows local auth on Cognitive Services accounts
+    // (Safe Secrets Standard). Enforce Entra-ID-only access here.
+    disableLocalAuth: true
   }
 }
 
@@ -190,6 +192,9 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = {
         name: appsSubnetName
         properties: {
           addressPrefix: appsSubnetCidr
+          // Org policy: subnets must opt out of default outbound access.
+          // Egress is provided by the Container Apps env's own NAT path.
+          defaultOutboundAccess: false
           // Delegation to the Container Apps service. Required for
           // workload-profile env vnetConfiguration.
           delegations: [
@@ -206,6 +211,8 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = {
         name: peSubnetName
         properties: {
           addressPrefix: peSubnetCidr
+          // Private endpoints don't need internet egress.
+          defaultOutboundAccess: false
           // Private endpoint NICs need this disabled.
           privateEndpointNetworkPolicies: 'Disabled'
         }
@@ -291,6 +298,8 @@ resource docai 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
   properties: {
     customSubDomainName: docaiName
     publicNetworkAccess: 'Enabled'
+    // Org policy: local auth disabled — must use Entra ID tokens.
+    disableLocalAuth: true
   }
 }
 

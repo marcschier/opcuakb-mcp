@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.36.1.42791",
-      "templateHash": "14337601578914761692"
+      "templateHash": "5547611234561225277"
     }
   },
   "parameters": {
@@ -126,7 +126,7 @@
         "customSubDomainName": "[variables('foundryName')]",
         "publicNetworkAccess": "Enabled",
         "allowProjectManagement": true,
-        "disableLocalAuth": false
+        "disableLocalAuth": true
       }
     },
     "foundryProject": {
@@ -219,6 +219,7 @@
             "name": "[variables('appsSubnetName')]",
             "properties": {
               "addressPrefix": "[variables('appsSubnetCidr')]",
+              "defaultOutboundAccess": false,
               "delegations": [
                 {
                   "name": "Microsoft.App.environments",
@@ -233,6 +234,7 @@
             "name": "[variables('peSubnetName')]",
             "properties": {
               "addressPrefix": "[variables('peSubnetCidr')]",
+              "defaultOutboundAccess": false,
               "privateEndpointNetworkPolicies": "Disabled"
             }
           }
@@ -335,7 +337,8 @@
       },
       "properties": {
         "customSubDomainName": "[variables('docaiName')]",
-        "publicNetworkAccess": "Enabled"
+        "publicNetworkAccess": "Enabled",
+        "disableLocalAuth": true
       }
     },
     "acr": {
