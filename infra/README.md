@@ -54,7 +54,7 @@ The script is **idempotent** — safe to run multiple times. It performs:
 2. Bicep deployment (`main.bicep`)
 3. Docker image build + push (pipeline + MCP server)
 4. Container Apps Job + App creation/update
-5. Knowledge Base setup (web knowledge source, GPT-4o model binding)
+5. Knowledge Base setup (web + index knowledge sources, GPT-4o model binding)
 6. MCP endpoint configuration
 
 ### Prerequisites

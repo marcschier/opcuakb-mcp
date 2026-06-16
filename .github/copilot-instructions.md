@@ -42,7 +42,7 @@ There are no unit tests — `OpcUaKb.Test` is a console app requiring live Azure
 - **Summary docs**: Pre-computed per-spec and cross-spec statistics (`content_type=nodeset_summary`)
 - **Hierarchy docs**: Per-ObjectType documents (`content_type=nodeset_hierarchy`) with supertype chain, declared/inherited member counts
 - **Type hierarchy**: Cross-file ObjectType inheritance resolution with alias/namespace normalization, memoized supertype chain traversal, and completeness tracking
-- **API version**: Azure AI Search agentic retrieval uses `2025-11-01-preview`. Knowledge sources use `kind: "web"` with `webParameters.domains.allowedDomains`.
+- **API version**: Azure AI Search agentic retrieval uses `2025-11-01-preview`. The knowledge base `{prefix}-kb` binds **two** knowledge sources: `{prefix}-web-ks` (`kind: "web"` with `webParameters.domains.allowedDomains`) for live opcfoundation.org lookups, and `{prefix}-index-ks` (`kind: "searchIndex"` targeting `opcua-content-index-v2`, `semanticConfigurationName: "semantic_config"`) for the structured spec/NodeSet content built by the pipeline. The index's built-in vectorizer authenticates to Foundry via the Search service MI (`Cognitive Services OpenAI User`), so it works under Foundry `disableLocalAuth=true`.
 - **Storage**: MI-only (`allowSharedKeyAccess: false`). All Pipeline + Indexer code takes `BlobServiceClient` via `DefaultAzureCredential(new Uri($"https://{name}.blob.core.windows.net"))`. There is **no** `STORAGE_CONNECTION_STRING` env var.
 
 ## Azure Resource Configuration
@@ -106,16 +106,30 @@ The deploy script uses `az rest` for preview API operations. Key schema patterns
 ```bash
 # Knowledge source (web type)
 az rest --method PUT \
-  --url "https://{search}.search.windows.net/knowledgebases/{kb}/knowledgesources/{ks}?api-version=2025-11-01-preview" \
+  --url "https://{search}.search.windows.net/knowledgesources/{prefix}-web-ks?api-version=2025-11-01-preview" \
   --body '{
     "kind": "web",
     "webParameters": { "domains": { "allowedDomains": ["*.opcfoundation.org"] } }
   }'
 
-# Knowledge base with models
+# Knowledge source (search index type) — grounds the KB in opcua-content-index-v2
+az rest --method PUT \
+  --url "https://{search}.search.windows.net/knowledgesources/{prefix}-index-ks?api-version=2025-11-01-preview" \
+  --body '{
+    "kind": "searchIndex",
+    "searchIndexParameters": {
+      "searchIndexName": "opcua-content-index-v2",
+      "semanticConfigurationName": "semantic_config",
+      "searchFields": [{ "name": "page_chunk" }],
+      "sourceDataFields": [{ "name": "page_chunk" }]
+    }
+  }'
+
+# Knowledge base binds BOTH sources + the GPT-4o model
 az rest --method PUT \
   --url "https://{search}.search.windows.net/knowledgebases/{kb}?api-version=2025-11-01-preview" \
   --body '{
+    "knowledgeSources": [{ "name": "{prefix}-web-ks" }, { "name": "{prefix}-index-ks" }],
     "models": [{ "kind": "azureOpenAI", "azureOpenAIParameters": { ... } }]
   }'
 ```

@@ -59,6 +59,7 @@ SEARCH_NAME="${PREFIX}-search"
 ACR_NAME="${PREFIX//\-/}registry"
 JOB_NAME="${PREFIX}-pipeline-job"
 KB_NAME="${PREFIX}-kb"
+INDEX_NAME="opcua-content-index-v2"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -187,6 +188,43 @@ HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
 [[ "$HTTP_STATUS" =~ ^2 ]] || warn "Web knowledge source creation returned HTTP ${HTTP_STATUS} (may already exist)."
 ok "Web knowledge source configured."
 
+# ── Step 6b: Create Index Knowledge Source ───────────────────────────
+# Binds the agentic-retrieval KB to the structured search index built by
+# the pipeline (per-section spec docs, NodeSet nodes, summaries, ObjectType
+# hierarchies). The index's built-in vectorizer authenticates to the
+# Foundry account via the search service's managed identity, so no key is
+# needed here. semanticConfigurationName must match the index's config.
+info "Creating index knowledge source..."
+HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
+  "${SEARCH_BASE}/knowledgesources/${PREFIX}-index-ks?api-version=${API_VERSION}" \
+  -H "Content-Type: application/json" \
+  -H "api-key: ${SEARCH_API_KEY}" \
+  -d "{
+    \"name\": \"${PREFIX}-index-ks\",
+    \"kind\": \"searchIndex\",
+    \"description\": \"OPC UA indexed specification + NodeSet content (${INDEX_NAME}): per-section spec docs, NodeSet nodes, summaries, and ObjectType hierarchies.\",
+    \"searchIndexParameters\": {
+      \"searchIndexName\": \"${INDEX_NAME}\",
+      \"semanticConfigurationName\": \"semantic_config\",
+      \"searchFields\": [
+        { \"name\": \"page_chunk\" },
+        { \"name\": \"section_title\" },
+        { \"name\": \"title\" },
+        { \"name\": \"spec_title\" },
+        { \"name\": \"description\" }
+      ],
+      \"sourceDataFields\": [
+        { \"name\": \"page_chunk\" },
+        { \"name\": \"spec_title\" },
+        { \"name\": \"section_title\" },
+        { \"name\": \"title\" }
+      ]
+    }
+  }")
+
+[[ "$HTTP_STATUS" =~ ^2 ]] || warn "Index knowledge source creation returned HTTP ${HTTP_STATUS} (may already exist)."
+ok "Index knowledge source configured."
+
 # ── Step 7: Create Knowledge Base ────────────────────────────────────
 info "Creating knowledge base '${KB_NAME}'..."
 HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
@@ -197,7 +235,8 @@ HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
     \"name\": \"${KB_NAME}\",
     \"description\": \"OPC UA knowledge base for answering questions about OPC UA specifications, generating test code, and looking up NodeSet definitions.\",
     \"knowledgeSources\": [
-      { \"name\": \"${PREFIX}-web-ks\" }
+      { \"name\": \"${PREFIX}-web-ks\" },
+      { \"name\": \"${PREFIX}-index-ks\" }
     ],
     \"models\": [
       {
