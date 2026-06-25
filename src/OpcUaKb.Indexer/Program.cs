@@ -193,6 +193,10 @@ async Task CreateIndexAsync()
             new SimpleField("section_path", SearchFieldDataType.String),
             new SimpleField("breadcrumb", SearchFieldDataType.Collection(SearchFieldDataType.String)) { IsFilterable = true, IsFacetable = true },
             new SimpleField("figures", SearchFieldDataType.Collection(SearchFieldDataType.String)) { IsFilterable = true },
+            // Profiles (profiles.opcfoundation.org) fields:
+            new SimpleField("release_status", SearchFieldDataType.String) { IsFilterable = true, IsFacetable = true },
+            new SimpleField("profile_group", SearchFieldDataType.String) { IsFilterable = true, IsFacetable = true },
+            new SimpleField("is_optional", SearchFieldDataType.Boolean) { IsFilterable = true },
         },
         ScoringProfiles =
         {

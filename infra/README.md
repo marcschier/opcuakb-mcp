@@ -15,7 +15,7 @@ All Azure resources are defined in [`main.bicep`](main.bicep) and deployed via [
 | Private DNS zone | `privatelink.blob.core.windows.net` | Linked to the VNet; resolves the storage account's blob endpoint to the PE private IP for any VNet client. |
 | Private endpoint | `{prefix}-storage-pe` | For storage `blob` group. Auto-approved (same subscription). |
 | Container Apps Job | `{prefix}-pipeline-job` | Weekly crawl + index (cron: `0 2 * * 0`, 24h timeout). Runs in the VNet-integrated workload-profile env; writes to storage via private endpoint. System MI + Cognitive Services OpenAI User + Storage Blob Data Contributor. |
-| Container App | `{prefix}-mcp-server` | MCP server with 11 tools + RAG. **Workload-profile env, VNet-integrated.** Reads/writes storage exclusively via private endpoint. System MI + Cognitive Services OpenAI User + Storage Blob Data Contributor. |
+| Container App | `{prefix}-mcp-server` | MCP server with 15 tools + RAG. **Workload-profile env, VNet-integrated.** Reads/writes storage exclusively via private endpoint. System MI + Cognitive Services OpenAI User + Storage Blob Data Contributor. |
 | Log Analytics Workspace | `{prefix}-logs` | Pipeline and MCP server log collection |
 | Azure Monitor Workbook | — | Pipeline dashboard (crawl/index/error tracking) |
 
@@ -116,7 +116,7 @@ az bicep build --file infra/main.bicep
 | `storageAccountName` | Storage account name | Used by Pipeline + Indexer with DefaultAzureCredential (shared-key auth disabled) |
 | `acrLoginServer` | `{prefix}registry.azurecr.io` | |
 | `mcpEndpoint` | `https://{prefix}-search.search.windows.net/knowledgebases/{prefix}-kb/mcp?api-version=2025-11-01-preview` | Built-in KB-hosted MCP endpoint |
-| `mcpServerEndpoint` | `https://{prefix}-mcp-server.<env>.azurecontainerapps.io` | Custom MCP server (11 tools + RAG); the Foundry Toolbox proxies to this |
+| `mcpServerEndpoint` | `https://{prefix}-mcp-server.<env>.azurecontainerapps.io` | Custom MCP server (15 tools + RAG); the Foundry Toolbox proxies to this |
 
 ### Monitoring
 

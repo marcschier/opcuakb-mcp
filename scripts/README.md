@@ -18,7 +18,7 @@ Configures MCP client applications (GitHub Copilot CLI, Claude Desktop) to use t
 
 **What it does:**
 1. Detects installed MCP clients (Copilot CLI, Claude Desktop)
-2. Adds/updates the `opcua-kb-tools` MCP server entry (single endpoint for all 11 tools including RAG Q&A)
+2. Adds/updates the `opcua-kb-tools` MCP server entry (single endpoint for all 15 tools including RAG Q&A)
 3. In local mode, verifies the `opcua-kb-mcp` dotnet tool is installed
 
 **Configuration files modified:**
@@ -93,7 +93,7 @@ End-to-end automation for deploying the OPC UA Hosted Agent to **Azure AI Foundr
 Teams / Web Chat → Foundry Agent Application (Activity bridge)
   → OpcUaKb.HostedAgent (Responses protocol container)
     → ModelContextProtocol.Client.McpClient
-      → OpcUaKb.McpServer (Container App, 11 tools)
+      → OpcUaKb.McpServer (Container App, 15 tools)
         → Azure AI Search + Azure AI Foundry (RAG)
 ```
 
@@ -123,7 +123,7 @@ Add to `~/.copilot/mcp-config.json`:
 }
 ```
 
-This single endpoint provides all 11 tools: structured search, RAG Q&A (`search_docs_rag`), compliance validation, version comparison, and model design suggestions.
+This single endpoint provides all 15 tools: structured search, RAG Q&A (`search_docs_rag`), compliance validation, version comparison, model design suggestions, and the profile graph (`list_profile_groups`, `get_profile`, `query_profiles`, `check_profile_conformance`).
 
 ### Claude Desktop
 
@@ -153,7 +153,7 @@ Add to `claude_desktop_config.json`:
 # Install the dotnet tool globally
 dotnet tool install -g OpcUaKb.McpServer
 
-# Run with stdio transport (all 11 tools)
+# Run with stdio transport (all 15 tools)
 SEARCH_ENDPOINT=https://<prefix>-search.search.windows.net \
 SEARCH_API_KEY=<key> \
 AOAI_ENDPOINT=https://<prefix>-foundry.openai.azure.com \

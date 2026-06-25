@@ -32,6 +32,8 @@ using Microsoft.Extensions.Logging;
 //   7. spec_index       — SpecIndexer.IndexAsync (HTML+STS → embed → upload)
 //   8. cloudlib         — UA-CloudLibrary nodesets (LAST so opcf namespace
 //                         coverage is complete for source tagging)
+//   9. profiles         — profiles.opcfoundation.org graph (profiles,
+//                         categories, conformance units) → graph blob + docs
 //
 // All search uploads target opcua-content-index-v2 (blue-green migration).
 // Designed to run as an Azure Container Apps scheduled job.
@@ -393,6 +395,39 @@ try
         }
 
         await EndPhaseAsync("cloudlib", phaseSw);
+    }
+
+    // ── Phase 9: Profiles (profiles.opcfoundation.org graph) ──────────
+    // Best-effort: a profiles API outage must not fail the core run.
+    if (!string.Equals(Environment.GetEnvironmentVariable("PROFILES_ENABLED"), "false",
+            StringComparison.OrdinalIgnoreCase))
+    {
+        phaseSw = await BeginPhaseAsync("profiles");
+        try
+        {
+            var profileApi = new ProfileApiClient(http, loggerFactory.CreateLogger<ProfileApiClient>());
+            var profileBuilder = new ProfileGraphBuilder(
+                profileApi, loggerFactory.CreateLogger<ProfileGraphBuilder>());
+            var profileGraph = await profileBuilder.BuildAsync();
+
+            await ProfileGraphStore.WriteAsync(
+                blobs.GetBlobContainerClient("opcua-content"), profileGraph, log);
+
+            var profileDocs = ProfileIndexer.BuildDocuments(profileGraph);
+            log.LogInformation("[PROFILES] Built {Count} search docs", profileDocs.Count);
+            var profileUploaded = await UploadBatchedAsync(v2SearchClient, profileDocs, "PROFILES", log);
+            log.LogInformation(
+                "[PIPELINE] Phase=profiles Uploaded={U} Expected={E} GraphProfiles={P} Errors={Err}",
+                profileUploaded, profileDocs.Count, profileGraph.Profiles.Count, profileBuilder.Errors);
+            if (profileUploaded < profileDocs.Count)
+                log.LogWarning("[PROFILES] Upload shortfall: uploaded {Uploaded} of {Expected} docs",
+                    profileUploaded, profileDocs.Count);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning("[PROFILES] Phase=profiles_failed Error={Error}", ex.Message);
+        }
+        await EndPhaseAsync("profiles", phaseSw);
     }
 
     log.LogInformation("[PIPELINE] Phase={Phase} Status={Status} TotalElapsedSec={Elapsed}",
@@ -760,6 +795,10 @@ static class SearchIndexFactory
             new SimpleField("section_path", SearchFieldDataType.String),
             new SimpleField("breadcrumb", SearchFieldDataType.Collection(SearchFieldDataType.String)) { IsFilterable = true, IsFacetable = true },
             new SimpleField("figures", SearchFieldDataType.Collection(SearchFieldDataType.String)) { IsFilterable = true },
+            // Profiles (profiles.opcfoundation.org) fields:
+            new SimpleField("release_status", SearchFieldDataType.String) { IsFilterable = true, IsFacetable = true },
+            new SimpleField("profile_group", SearchFieldDataType.String) { IsFilterable = true, IsFacetable = true },
+            new SimpleField("is_optional", SearchFieldDataType.Boolean) { IsFilterable = true },
         },
         ScoringProfiles =
         {

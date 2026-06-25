@@ -7,9 +7,9 @@ All projects target .NET 10 with nullable enabled and implicit usings.
 | Project | Type | Description |
 |---------|------|-------------|
 | [`OpcUaKb.Pipeline`](OpcUaKb.Pipeline/) | Console (Container Apps Job) | Combined crawl + index + NodeSet parse + CloudLib pipeline |
-| [`OpcUaKb.McpServer`](OpcUaKb.McpServer/) | Web (Container App) | MCP server with 11 tools — search, RAG Q&A, compliance, modelling (HTTP/SSE + stdio) |
+| [`OpcUaKb.McpServer`](OpcUaKb.McpServer/) | Web (Container App) | MCP server with 15 tools — search, RAG Q&A, compliance, modelling, profile graph + conformance (HTTP/SSE + stdio) |
 | [`OpcUaKb.HostedAgent`](OpcUaKb.HostedAgent/) | Web (Foundry Hosted Agent) | Microsoft Agent Framework agent using the Responses protocol; connects directly to `OpcUaKb.McpServer` via `ModelContextProtocol.Client` so each MCP tool is a distinct `AIFunction`. Replaces the legacy Bot Framework agent. |
-| [`OpcUaKb.Core`](OpcUaKb.Core/) | Library | Shared `KbService` (KB retrieve + GPT-4o synthesis) and tool implementations used by McpServer |
+| [`OpcUaKb.Core`](OpcUaKb.Core/) | Library | Shared `KbService` (KB retrieve + GPT-4o synthesis), `ProfileGraphService`, and tool implementations used by McpServer |
 | [`OpcUaKb.Setup`](OpcUaKb.Setup/) | Console | Creates Web Knowledge Source, Knowledge Base, verifies MCP endpoint |
 | [`OpcUaKb.Crawler`](OpcUaKb.Crawler/) | Console | Standalone BFS web crawler for `*.opcfoundation.org` |
 | [`OpcUaKb.Indexer`](OpcUaKb.Indexer/) | Console | Standalone HTML chunker + embedder + search indexer |
@@ -57,6 +57,7 @@ There are no unit tests — `OpcUaKb.Test` is a console app requiring live Azure
 | **2. Index** | ~3 hours | Parse HTML → chunks, generate embeddings via `text-embedding-3-large` (120K TPM), upload to Azure AI Search. Version catalog built from crawled main page. |
 | **3. NodeSet** | ~30 min | Parse NodeSet XMLs from blob storage, build cross-file type hierarchy with alias/namespace normalization, generate per-ObjectType hierarchy docs + per-spec/cross-spec summary docs. |
 | **4. CloudLib** *(optional)* | ~1 hour | Download all NodeSets from [UA-CloudLibrary](https://uacloudlibrary.opcfoundation.org) REST API (`/infomodel/find2` with cursor pagination), parse, generate summaries/hierarchies, upload with `cloudlib_*` content types. |
+| **5. Profiles** | ~varies | Crawl [profiles.opcfoundation.org](https://profiles.opcfoundation.org) via its anonymous REST API for every profile group and version. Build a normalized profile graph (profiles, categories, conformance units/groups + include/conformance edges, tagged by release status), write `profiles/graph.json.gz` + `profiles/catalog.json` to blob storage, and upload `profile`/`conformance_unit`/`conformance_group`/`profile_category` docs. Best-effort; disable with `PROFILES_ENABLED=false`. |
 
 ### Running Locally
 
@@ -87,7 +88,7 @@ az containerapp job start --name <prefix>-pipeline-job --resource-group <rg>
 
 ## MCP Server
 
-The MCP server is the single endpoint for all 11 tools including RAG Q&A. It connects to Azure AI Search for structured queries and to Azure AI Foundry (GPT-4o) for natural language answer synthesis.
+The MCP server is the single endpoint for all 15 tools including RAG Q&A. It connects to Azure AI Search for structured queries and to Azure AI Foundry (GPT-4o) for natural language answer synthesis.
 
 ### Transports
 
@@ -179,7 +180,7 @@ User in Teams/M365 Copilot → Foundry Agent Application (Activity bridge)
            → Azure AI Search + Azure AI Foundry (RAG)
 ```
 
-Each of the 11 MCP tools (search_docs, list_specs, get_spec_summary, etc.) becomes a distinct `McpClientTool` (`AIFunction`) so GPT-4o picks them by name. The Agent Framework hosting library runs the full tool-call loop locally in the container (model → tool_call → MCP roundtrip → tool_result → final answer). No manual history hydration, no manual dispatch.
+Each of the 15 MCP tools (search_docs, list_specs, get_spec_summary, get_profile, check_profile_conformance, etc.) becomes a distinct `McpClientTool` (`AIFunction`) so GPT-4o picks them by name. The Agent Framework hosting library runs the full tool-call loop locally in the container (model → tool_call → MCP roundtrip → tool_result → final answer). No manual history hydration, no manual dispatch.
 
 > **Region constraint** — Foundry Hosted Agents are in preview and only available in select regions (e.g., westus3, westus, norwayeast, francecentral, japaneast). The KB infrastructure (Search, Storage, MCP server, pipeline job) can be in any other region — the agent calls the MCP server cross-region over HTTPS.
 

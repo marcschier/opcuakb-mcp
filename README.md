@@ -18,7 +18,7 @@ An Azure AI Search agentic retrieval pipeline that exposes the complete OPC UA r
 
 🔧 **11 purpose-built MCP tools** — RAG Q&A, structured search, compliance validation, version comparison, and information model design suggestions — all accessible via a single MCP endpoint. AI agents can ask natural language questions, find specific ObjectTypes, check a NodeSet against a companion spec, or get help designing a new information model without leaving their workflow.
 
-🏢 **Microsoft 365 Copilot agent** — Use the Knowledge Base directly from Microsoft Teams and Microsoft 365 Copilot Chat. The hosted agent in [`src/OpcUaKb.HostedAgent/`](src/OpcUaKb.HostedAgent/) is a **Foundry Hosted Agent** using the **Responses protocol** + the **Microsoft Agent Framework**. It connects directly to the `OpcUaKb.McpServer` via `ModelContextProtocol.Client`, so each of the 11 MCP tools is a distinct AIFunction the model can call by name.
+🏢 **Microsoft 365 Copilot agent** — Use the Knowledge Base directly from Microsoft Teams and Microsoft 365 Copilot Chat. The hosted agent in [`src/OpcUaKb.HostedAgent/`](src/OpcUaKb.HostedAgent/) is a **Foundry Hosted Agent** using the **Responses protocol** + the **Microsoft Agent Framework**. It connects directly to the `OpcUaKb.McpServer` via `ModelContextProtocol.Client`, so each of the 15 MCP tools is a distinct AIFunction the model can call by name.
 
 🧬 **Type hierarchy resolution** — Cross-file ObjectType inheritance is fully resolved with alias and namespace normalization. Every ObjectType includes its complete supertype chain, declared member counts, and inherited member totals. This is the kind of deep structural insight that's tedious to extract manually from XML files.
 
@@ -43,7 +43,7 @@ graph TD
     Blob --> NodeSet["NodeSet XML Parser<br/>+ Type Hierarchy"]
     Chunker --> Index["Search Index<br/>(vectors + text + structured fields)"]
     NodeSet --> |"nodes + hierarchy + summaries"| Index
-    Index --> McpServer["MCP Server<br/>(11 tools + RAG)"]
+    Index --> McpServer["MCP Server<br/>(15 tools + RAG)"]
     Index --> KB["Knowledge Base<br/>(Azure AI Foundry + GPT-4o)"]
     KB --> McpServer
     McpServer --> Clients["Copilot CLI / Claude Desktop<br/>/ AI Agents"]
@@ -51,7 +51,7 @@ graph TD
 
 ## 🔌 MCP Tools
 
-The MCP server exposes 11 tools — structured search, RAG Q&A, compliance validation, and modelling:
+The MCP server exposes 15 tools — structured search, RAG Q&A, compliance validation, modelling, and the profile graph:
 
 ### 🔍 Search & Discovery
 
@@ -125,6 +125,37 @@ The MCP server exposes 11 tools — structured search, RAG Q&A, compliance valid
 <td valign="top">
 
 **`suggest_model`** — Suggest OPC UA information model design based on a domain description, recommending base types from DI/Machinery/IA and OPC 11030 best practices.
+
+</td>
+</tr>
+</table>
+
+### 🕸️ Profile Graph & Conformance
+
+Backed by the `profiles` pipeline phase, which crawls [profiles.opcfoundation.org](https://profiles.opcfoundation.org) into a navigable graph (profiles, categories, conformance units/groups + include/conformance edges) tagged by release status. Profile tools default to **Released** profiles; widen with `status` = `rc` / `draft` / `all`.
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+**`list_profile_groups`** — List spec+version profile groups (e.g. `UACore 1.05`, `DI 1.05`) with per-group profile / conformance-unit counts and release-status mix.
+
+</td>
+<td width="50%" valign="top">
+
+**`get_profile`** — A single profile's neighborhood: description, status, group, required conformance units (mandatory vs optional), profiles it includes, and profiles that include it (reverse edges).
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**`query_profiles`** — Graph query: filter profiles by name fragment, group, and status, then optionally expand `includes` / `included_by` relationships.
+
+</td>
+<td valign="top">
+
+**`check_profile_conformance`** — Conformance analysis in three modes: `expand` (transitive required/optional conformance units + included profiles), `satisfy` (which profiles a set of supported conformance units fulfils), `diff` (conformance-unit/include differences between two profiles).
 
 </td>
 </tr>

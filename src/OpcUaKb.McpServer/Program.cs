@@ -57,6 +57,7 @@ if (useStdio)
     builder.Services.AddSingleton<SearchService>();
     builder.Services.AddSingleton<KbService>();
     builder.Services.AddSingleton(_ => NodeSetLoader.CreateDefault());
+    builder.Services.AddSingleton<ProfileGraphService>();
     builder.Services
         .AddMcpServer(o => o.ServerInfo = new() { Name = "opcua-kb", Version = "1.0.0" })
         .WithStdioServerTransport()
@@ -79,6 +80,7 @@ else
     builder.Services.AddSingleton<SearchService>();
     builder.Services.AddSingleton<KbService>();
     builder.Services.AddSingleton(_ => NodeSetLoader.CreateDefault());
+    builder.Services.AddSingleton<ProfileGraphService>();
 
     // Optional BlobContainerClient for the upload endpoint. When the env
     // var isn't set, /upload-nodeset returns 503.
