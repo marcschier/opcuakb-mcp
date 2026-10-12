@@ -319,6 +319,8 @@ before publishing. The live Azure KB tests still require `SEARCH_API_KEY` and
 are not part of this offline qualification.
 Both qualification and publication verify the packaged MCP manifest version,
 repository URL, and nuspec source commit.
+Publication also checks the authenticated GitHub feed for an unused package
+version before upload and compares the downloaded package byte for byte.
 
 The historical STS/HTML snapshots are not tracked in this repository. With user
 authorization, `prepare-test-inputs.ps1` downloads equivalent publisher-sourced

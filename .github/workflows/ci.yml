@@ -120,6 +120,36 @@ jobs:
         shell: pwsh
         run: ./scripts/verify-tool-package.ps1 -ExpectedPackageVersion '${{ steps.nbgv.outputs.version }}' -ExpectedCommit ${{ github.sha }}
 
+      - name: Require unused GitHub package version
+        shell: pwsh
+        env:
+          FEED_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FEED_USER: ${{ github.actor }}
+          FEED_URL: https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
+          PACKAGE_VERSION: ${{ steps.nbgv.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $credential = [pscredential]::new($env:FEED_USER, (ConvertTo-SecureString $env:FEED_TOKEN -AsPlainText -Force))
+          $index = Invoke-RestMethod -Uri $env:FEED_URL -Authentication Basic -Credential $credential
+          $resources = @($index.resources | Where-Object { $_.'@type' -eq 'PackageBaseAddress/3.0.0' })
+          if ($resources.Count -ne 1) { throw 'Expected exactly one package base address from the GitHub feed.' }
+          $base = [uri]$resources[0].'@id'
+          if ($base.Scheme -ne 'https' -or $base.Host -ne 'nuget.pkg.github.com') {
+            throw 'The GitHub package base address is not on the expected HTTPS host.'
+          }
+          $url = [uri]::new($base, 'opcuakb.mcpserver/index.json')
+          $response = Invoke-WebRequest -Uri $url -Authentication Basic -Credential $credential -SkipHttpErrorCheck -MaximumRedirection 0
+          if ($response.StatusCode -eq 200) {
+            $versions = ($response.Content | ConvertFrom-Json).versions
+            if (-not $versions) { throw 'The GitHub feed returned an invalid package version list.' }
+            if ($versions -contains $env:PACKAGE_VERSION) {
+              throw "GitHub package version $env:PACKAGE_VERSION already exists; refusing to upload."
+            }
+          } elseif ($response.StatusCode -ne 404) {
+            throw "Cannot establish package version availability: HTTP $($response.StatusCode)."
+          }
+          Write-Host "Verified GitHub package version $env:PACKAGE_VERSION is unused before upload."
+
       - name: Push to GitHub Packages
         run: dotnet nuget push ./nupkg/*.nupkg --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" --api-key ${{ secrets.GITHUB_TOKEN }}
 
