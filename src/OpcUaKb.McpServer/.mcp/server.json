@@ -1,9 +1,9 @@
 {
   "name": "opcua-kb-mcp",
-  "version": "5.0.0",
+  "version": "5.0.3",
   "description": "OPC UA Knowledge Base MCP Server — 17 tools: structured NodeSet search, RAG Q&A, validate/compliance/compare NodeSets, modelling guidance, the OPC UA Profile graph + conformance tools, and asynchronous live-server → companion-spec projection, across all OPC UA specifications and companion specs.",
   "publisher": "marcschier",
-  "repository": "https://github.com/marcschier/OpcUaKb",
+  "repository": "https://github.com/marcschier/opcuakb-mcp",
   "tools": [
     {
       "name": "search_nodes",
