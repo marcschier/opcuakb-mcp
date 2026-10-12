@@ -7,76 +7,147 @@ on:
     branches: [main]
 
 env:
-  DOTNET_VERSION: '10.0.x'
+  DOTNET_VERSION: '10.0.401'
+  NBGV_VERSION: '3.10.94'
+  BUILDX_VERSION: 'v0.38.0'
   REGISTRY: ghcr.io
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: pwsh
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0  # Full history for Nerdbank.GitVersioning
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Restore
-        run: dotnet restore
+        run: dotnet restore -p:NuGetAuditMode=all -p:WarningsAsErrors=NU1901%3BNU1902%3BNU1903%3BNU1904
 
       - name: Build
         run: dotnet build --no-restore -c Release
 
-      - name: Test
-        run: dotnet build --no-restore -c Release src/OpcUaKb.Test
-        # Note: OpcUaKb.Test is a console app that requires SEARCH_API_KEY at runtime.
-        # This step validates it compiles. Integration tests run separately.
+      - name: Prepare verified publisher inputs
+        run: ./scripts/prepare-test-inputs.ps1
+
+      - name: Run existing offline tests
+        run: |
+          foreach ($selector in @('url', 'sts', 'html', 'mapping')) {
+            dotnet run --project src/OpcUaKb.Test -c Release --no-build -- $selector
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      - name: Qualify dotnet tool packaging
+        run: dotnet pack src/OpcUaKb.McpServer -c Release --no-build -o ./nupkg
+
+  qualify-containers:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: pipeline
+            context: .
+            dockerfile: Dockerfile
+          - name: mcp-server
+            context: .
+            dockerfile: Dockerfile.mcpserver
+          - name: hosted-agent
+            context: ./src/OpcUaKb.HostedAgent
+            dockerfile: ./src/OpcUaKb.HostedAgent/Dockerfile
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          version: ${{ env.BUILDX_VERSION }}
+          driver-opts: image=moby/buildkit:v0.34.0
+      - name: Build container without publishing
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: false
 
   publish-nuget-tool:
-    needs: build-and-test
+    needs: [build-and-test, qualify-containers]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Get version from NBGV
         id: nbgv
         run: |
-          dotnet tool install -g nbgv
+          dotnet tool install --tool-path ./version-tools nbgv --version "$NBGV_VERSION"
+          export PATH="$PWD/version-tools:$PATH"
           VERSION=$(nbgv get-version -v NuGetPackageVersion)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Version: $VERSION"
 
       - name: Pack dotnet tool
-        run: dotnet pack src/OpcUaKb.McpServer -c Release -o ./nupkg
+        run: dotnet pack src/OpcUaKb.McpServer -c Release -o ./nupkg -p:RepositoryCommit=${{ github.sha }}
 
       - name: Push to GitHub Packages
-        run: dotnet nuget push ./nupkg/*.nupkg --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" --api-key ${{ secrets.GITHUB_TOKEN }} --skip-duplicate
+        run: dotnet nuget push ./nupkg/*.nupkg --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" --api-key ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify exact package from GitHub feed
+        env:
+          FEED_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FEED_USER: ${{ github.actor }}
+          FEED_URL: https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
+          PACKAGE_VERSION: ${{ steps.nbgv.outputs.version }}
+        run: |
+          CONFIG="$RUNNER_TEMP/github-nuget.config"
+          printf '<configuration><packageSources><clear /></packageSources></configuration>' > "$CONFIG"
+          trap 'rm -f "$CONFIG"' EXIT
+          dotnet nuget add source "$FEED_URL" --name github --username "$FEED_USER" --password "$FEED_TOKEN" --store-password-in-clear-text --configfile "$CONFIG"
+          dotnet tool install --tool-path ./feed-tool OpcUaKb.McpServer --version "$PACKAGE_VERSION" --configfile "$CONFIG" --no-cache
+          DOWNLOADED=$(find ./feed-tool -iname "opcuakb.mcpserver.$PACKAGE_VERSION.nupkg" -print -quit)
+          test -n "$DOWNLOADED"
+          cmp "./nupkg/OpcUaKb.McpServer.$PACKAGE_VERSION.nupkg" "$DOWNLOADED"
+          sha256sum "$DOWNLOADED"
+          echo "Verified GitHub feed package $PACKAGE_VERSION matches the merge-SHA package byte for byte."
 
       - name: Upload NuGet artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: nuget-package
           path: ./nupkg/*.nupkg
           retention-days: 90
 
   publish-containers:
-    needs: build-and-test
+    needs: publish-nuget-tool
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     strategy:
       matrix:
         include:
@@ -85,19 +156,20 @@ jobs:
           - image: opcua-mcp-server
             dockerfile: Dockerfile.mcpserver
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0  # Full history for Nerdbank.GitVersioning
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Get version from NBGV
         id: nbgv
         run: |
-          dotnet tool install -g nbgv
+          dotnet tool install --tool-path ./version-tools nbgv --version "$NBGV_VERSION"
+          export PATH="$PWD/version-tools:$PATH"
           VERSION=$(nbgv get-version -v NuGetPackageVersion)
           SHA=$(nbgv get-version -v GitCommitIdShort)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
@@ -105,15 +177,21 @@ jobs:
           echo "Version: $VERSION (sha: $SHA)"
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          version: ${{ env.BUILDX_VERSION }}
+          driver-opts: image=moby/buildkit:v0.34.0
+
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
           tags: |
@@ -122,10 +200,21 @@ jobs:
             type=sha,prefix=
 
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./${{ matrix.dockerfile }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Verify published source and version
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
+          PACKAGE_VERSION: ${{ steps.nbgv.outputs.version }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          docker pull "$IMAGE:$PACKAGE_VERSION"
+          test "$(docker image inspect "$IMAGE:$PACKAGE_VERSION" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$SOURCE_COMMIT"
+          test "$(docker image inspect "$IMAGE:$PACKAGE_VERSION" --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')" = "$PACKAGE_VERSION"
+          docker image inspect "$IMAGE:$PACKAGE_VERSION" --format '{{ json .RepoDigests }}'

@@ -20,7 +20,7 @@ var transport = new HttpClientTransport(new HttpClientTransportOptions
     Name = "opcua-kb-agent",
 });
 var mcpClient = await McpClient.CreateAsync(transport);
-var mcpTools = await mcpClient.ListToolsAsync();   // 11 McpClientTool
+var mcpTools = await mcpClient.ListToolsAsync();   // 17 McpClientTool
 
 AIAgent agent = projectClient.AsAIAgent(
     model: deployment,
@@ -30,7 +30,7 @@ AIAgent agent = projectClient.AsAIAgent(
 
 Each MCP tool becomes its own `McpClientTool` (which is an `AIFunction`) with
 its own name + JSON schema, so the model sees `search_docs`, `list_specs`,
-`get_spec_summary`, etc. as 11 individual tools and can call them by name.
+`get_spec_summary`, etc. as 17 individual tools and can call them by name.
 
 > **Why not the Foundry Toolbox?** An earlier revision used
 > `projectClient.GetToolboxToolsAsync(toolboxName)` which wraps an MCP-type
@@ -97,6 +97,11 @@ azd deploy
 ## References
 
 - Upstream pattern: `ModelContextProtocol.Client.McpClient.CreateAsync` with
-  `HttpClientTransport` — see `ModelContextProtocol.Core` 1.2.0.
-- Foundry hosting library: `Microsoft.Agents.AI.Foundry.Hosting` 1.3.0-preview.
+  `HttpClientTransport` — see `ModelContextProtocol.Core` 2.2.0.
+- Foundry hosting library: `Microsoft.Agents.AI.Foundry.Hosting`
+  1.11.1-preview.260625.1, the last release compatible with the manifest's
+  Responses **v1** protocol. Version 1.12 and later require Responses v2;
+  that protocol migration is intentionally outside this maintenance release.
+- Foundry project SDK: `Azure.AI.Projects` 2.1.0-beta.4, preserving the existing
+  2.x beta channel rather than adopting the 3.x beta API.
 - Region support: <https://learn.microsoft.com/azure/foundry/agents/concepts/limits-quotas-regions>.

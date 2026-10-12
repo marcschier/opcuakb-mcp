@@ -6,17 +6,16 @@
     <AssemblyName>OpcUaKb.HostedAgent</AssemblyName>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <NoWarn>$(NoWarn);NU1903;NU1605;OPENAI001</NoWarn>
+    <NoWarn>$(NoWarn);OPENAI001</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Agent Framework hosting — provides AgentHost, AddFoundryResponses, MapFoundryResponses,
-         and the GetToolboxToolsAsync extension on AIProjectClient. -->
-    <PackageReference Include="Microsoft.Agents.AI.Foundry.Hosting" Version="1.3.0-preview.260423.1" />
+    <!-- Last hosting release compatible with the manifest's Responses v1 protocol. -->
+    <PackageReference Include="Microsoft.Agents.AI.Foundry.Hosting" Version="1.11.1-preview.260625.1" />
     <!-- Foundry SDK — provides AIProjectClient and AsAIAgent. -->
-    <PackageReference Include="Azure.AI.Projects" Version="2.1.0-beta.1" />
+    <PackageReference Include="Azure.AI.Projects" Version="2.1.0-beta.4" />
     <!-- MCP client — connects directly to our OpcUaKb.McpServer over SSE so each of the
-         11 tools (search_docs, list_specs, ...) is exposed as a distinct AIFunction
+         17 tools (search_docs, list_specs, ...) is exposed as a distinct AIFunction
          that GPT-4o can call by name. -->
     <PackageReference Include="ModelContextProtocol" Version="2.2.0" />
     <!-- .env file support for local development. -->
