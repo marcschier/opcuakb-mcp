@@ -2,11 +2,11 @@
 
 <img src="docs/images/logo.svg" alt="OPC UA Knowledge Base" width="160" align="left" style="margin-right: 16px"/>
 
-[![Build](https://github.com/marcschier/OpcUaKb/actions/workflows/ci.yml/badge.svg)](https://github.com/marcschier/OpcUaKb/actions/workflows/ci.yml)
+[![Build](https://github.com/marcschier/opcuakb-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/marcschier/opcuakb-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-purple)](https://dotnet.microsoft.com/download/dotnet/10.0)
-[![MCP](https://img.shields.io/badge/MCP-1.4-green)](https://modelcontextprotocol.io)
-[![Version](https://img.shields.io/badge/version-5.0-orange)](version.json)
+[![MCP](https://img.shields.io/badge/MCP-2.2-green)](https://modelcontextprotocol.io)
+[![Version](https://img.shields.io/badge/version-5.0.3-orange)](version.json)
 
 <br clear="left"/>
 
@@ -294,3 +294,42 @@ Weekly crawl + index pipeline (Sunday 2am UTC, Container Apps Job, 24h timeout):
 | **CloudLib** *(optional)* | Download 450+ NodeSets from [UA-CloudLibrary](https://uacloudlibrary.opcfoundation.org), index as `cloudlib_*` content types. |
 
 See [`src/README.md`](src/README.md) for running locally, project details, and search index schema.
+
+## Build and release maintenance
+
+Version **5.0.3** is a stable maintenance release after the GitHub Packages
+tool version **5.0.2** (the previous GitHub release tag was `v5.0.0`).
+It updates compatible dependencies without changing the public MCP tool
+surface, authentication defaults, .NET 10 target, or Hosted Agent Responses v1
+protocol. The SDK is pinned in `global.json`; all three Dockerfiles pin the
+servicing SDK/runtime images and their manifest digests.
+
+```powershell
+dotnet build -c Release
+.\scripts\prepare-test-inputs.ps1
+foreach ($selector in @('url', 'sts', 'html', 'mapping')) {
+    dotnet run --project src\OpcUaKb.Test -c Release --no-build -- $selector
+    if ($LASTEXITCODE -ne 0) { throw "Test selector '$selector' failed." }
+}
+```
+
+CI executes these existing tests on Windows and Linux, audits all resolved
+NuGet dependencies, packages the dotnet tool, and builds all three containers
+before publishing. The live Azure KB tests still require `SEARCH_API_KEY` and
+are not part of this offline qualification.
+
+The historical STS/HTML snapshots are not tracked in this repository. With user
+authorization, `prepare-test-inputs.ps1` downloads equivalent publisher-sourced
+Part 3 **1.05.06** inputs into the build output, verifies their pinned SHA-256
+hashes, and leaves all test assertions and tracked mapping fixtures unchanged.
+The STS URL uses the publisher's current `t63925672496` export instead of the
+unavailable `t63914194059` export; byte identity with the missing historical
+files cannot be established. The unchanged tests verify the spec version,
+publication date, namespace, upstream NodeSet tag, section paths, and content.
+Publisher-input changes fail qualification rather than silently updating hashes.
+
+Successful `main` qualification publishes `OpcUaKb.McpServer` to **GitHub
+Packages** first and verifies an exact-version download byte for byte, then
+publishes the pipeline and MCP server to **GHCR** and verifies their source
+revision/version labels. Duplicate package uploads fail. This repository has
+**no NuGet.org promotion workflow**; GitHub releases do not publish to NuGet.org.
