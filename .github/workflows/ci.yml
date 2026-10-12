@@ -52,7 +52,10 @@ jobs:
           }
 
       - name: Qualify dotnet tool packaging
-        run: dotnet pack src/OpcUaKb.McpServer -c Release --no-build -o ./nupkg
+        run: dotnet pack src/OpcUaKb.McpServer -c Release --no-build -o ./nupkg -p:RepositoryCommit=${{ github.sha }}
+
+      - name: Verify packaged metadata and source
+        run: ./scripts/verify-tool-package.ps1 -ExpectedCommit ${{ github.sha }}
 
   qualify-containers:
     needs: build-and-test
@@ -112,6 +115,10 @@ jobs:
 
       - name: Pack dotnet tool
         run: dotnet pack src/OpcUaKb.McpServer -c Release -o ./nupkg -p:RepositoryCommit=${{ github.sha }}
+
+      - name: Verify packaged metadata and source
+        shell: pwsh
+        run: ./scripts/verify-tool-package.ps1 -ExpectedPackageVersion '${{ steps.nbgv.outputs.version }}' -ExpectedCommit ${{ github.sha }}
 
       - name: Push to GitHub Packages
         run: dotnet nuget push ./nupkg/*.nupkg --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" --api-key ${{ secrets.GITHUB_TOKEN }}
