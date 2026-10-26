@@ -97,7 +97,7 @@ azd deploy
 ## References
 
 - Upstream pattern: `ModelContextProtocol.Client.McpClient.CreateAsync` with
-  `HttpClientTransport` — see `ModelContextProtocol.Core` 2.2.0.
+  `HttpClientTransport` — see `ModelContextProtocol.Core` 2.3.0.
 - Foundry hosting library: `Microsoft.Agents.AI.Foundry.Hosting`
   1.11.1-preview.260625.1, the last release compatible with the manifest's
   Responses **v1** protocol. Version 1.12 and later require Responses v2;

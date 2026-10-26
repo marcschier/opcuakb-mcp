@@ -5,8 +5,8 @@
 [![Build](https://github.com/marcschier/opcuakb-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/marcschier/opcuakb-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-purple)](https://dotnet.microsoft.com/download/dotnet/10.0)
-[![MCP](https://img.shields.io/badge/MCP-2.2-green)](https://modelcontextprotocol.io)
-[![Version](https://img.shields.io/badge/version-5.0.3-orange)](version.json)
+[![MCP](https://img.shields.io/badge/MCP-2.3-green)](https://modelcontextprotocol.io)
+[![Version](https://img.shields.io/badge/version-5.0.4-orange)](version.json)
 
 <br clear="left"/>
 
@@ -297,12 +297,13 @@ See [`src/README.md`](src/README.md) for running locally, project details, and s
 
 ## Build and release maintenance
 
-Version **5.0.3** is a stable maintenance release after the GitHub Packages
-tool version **5.0.2** (the previous GitHub release tag was `v5.0.0`).
-It updates compatible dependencies without changing the public MCP tool
-surface, authentication defaults, .NET 10 target, or Hosted Agent Responses v1
-protocol. The SDK is pinned in `global.json`; all three Dockerfiles pin the
-servicing SDK/runtime images and their manifest digests.
+Version **5.0.4** is a stable maintenance release after the GitHub Packages
+tool version **5.0.3** (the previous GitHub release tag was `v5.0.0`).
+It updates the MCP SDK to 2.3.0, AngleSharp to 1.8.6, and .NET servicing
+dependencies to 10.0.14, with SDK 10.0.403, without changing the public MCP
+tool surface, authentication defaults, .NET 10 target, or Hosted Agent
+Responses v1 protocol. The SDK is pinned in `global.json`; all three Dockerfiles
+pin the servicing SDK/runtime images and their verified manifest digests.
 
 ```powershell
 dotnet build -c Release

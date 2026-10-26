@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 env:
-  DOTNET_VERSION: '10.0.401'
+  DOTNET_VERSION: '10.0.403'
   NBGV_VERSION: '3.10.94'
   BUILDX_VERSION: 'v0.38.0'
   REGISTRY: ghcr.io
