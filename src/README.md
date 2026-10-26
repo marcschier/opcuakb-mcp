@@ -31,13 +31,16 @@ There are no unit tests — `OpcUaKb.Test` is a console app requiring live Azure
 
 | Package | Version | Used By |
 |---------|---------|---------|
-| `Azure.Search.Documents` | 11.8.0-beta.1 | Pipeline, Indexer, McpServer |
+| `Azure.Search.Documents` | 12.0.0 | Core, Pipeline, Indexer, McpServer, Setup, Test |
 | `Azure.AI.OpenAI` | 2.9.0-beta.1 | Pipeline, Indexer |
-| `Azure.Identity` | 1.14.2 | Core (DefaultAzureCredential for AOAI) |
-| `ModelContextProtocol.AspNetCore` | 1.2.0 | McpServer |
-| `ModelContextProtocol` (Core) | 1.2.0 | HostedAgent (direct MCP client) |
-| `Microsoft.Agents.AI.Foundry.Hosting` | 1.3.0-preview.260423.1 | HostedAgent (Agent Framework + Responses) |
-| `Azure.AI.Projects` | 2.1.0-beta.1 | HostedAgent (project client + AsAIAgent) |
+| `Azure.Identity` | 1.21.0 | Core, Pipeline, Indexer, Setup, Test |
+| `Azure.Storage.Blobs` | 12.30.1 | Core, Crawler, Indexer, Pipeline, McpServer |
+| `Azure.Storage.Queues` | 12.28.1 | Core, McpServer |
+| `AngleSharp` | 1.8.6 | Crawler, Indexer, Pipeline, Test |
+| `ModelContextProtocol.AspNetCore` | 2.3.0 | McpServer |
+| `ModelContextProtocol` (Core) | 2.3.0 | Core, HostedAgent (direct MCP client) |
+| `Microsoft.Agents.AI.Foundry.Hosting` | 1.11.1-preview.260625.1 | HostedAgent (Agent Framework + Responses v1) |
+| `Azure.AI.Projects` | 2.1.0-beta.4 | HostedAgent (project client + AsAIAgent) |
 
 ## Conventions
 
