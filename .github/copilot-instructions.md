@@ -148,7 +148,7 @@ https://{search}.search.windows.net/knowledgebases/{kb}/mcp?api-version=2025-11-
 - Top-level statements for all console apps (Pipeline, Setup, Test, McpServer, HostedAgent)
 - Sealed classes preferred
 - No explicit namespaces in Pipeline project
-- NuGet: `Azure.Search.Documents` 12.0.0, `Azure.AI.OpenAI` 2.9.0-beta.1, `AngleSharp` 1.8.6, `ModelContextProtocol.AspNetCore` 2.3.0 (server), `Microsoft.AspNetCore.Authentication.JwtBearer` 10.0.14 (server — opt-in entra mode), `ModelContextProtocol` 2.3.0 (Core + HostedAgent client), `Microsoft.Agents.AI.Foundry.Hosting` 1.11.1-preview.260625.1 (HostedAgent), `Azure.AI.Projects` 2.1.0-beta.4 (HostedAgent)
+- NuGet: `Azure.Search.Documents` 12.0.0, `Azure.AI.OpenAI` 2.9.0-beta.1, `AngleSharp` 1.10.3, `ModelContextProtocol.AspNetCore` 2.4.0 (server), `Microsoft.AspNetCore.Authentication.JwtBearer` 10.0.15 (server — opt-in entra mode), `ModelContextProtocol` 2.4.0 (Core + HostedAgent client), `Microsoft.Agents.AI.Foundry.Hosting` 1.11.1-preview.260625.1 (HostedAgent), `Azure.AI.Projects` 2.1.0-beta.4 (HostedAgent)
 - Structured logging: `[PHASE] Key=Value` format for KQL dashboard queries
 - Pipeline status tracked in `_pipeline-status.json` blob
 - MCP server uses static tool classes with `[McpServerToolType]` / `[McpServerTool]` attributes

@@ -12,7 +12,7 @@ $inputs = @(
     @{
         Name = 'opc-10000-3-v1.05.06-full.html'
         Url = 'https://reference.opcfoundation.org/specs/OPC-10000-3/v1.05.06/full'
-        Sha256 = '6B804DF8BBB9D415BE064746DEA0AC36254DC81F4D7F280B48AF5D2F1D3FE2B9'
+        Sha256 = 'EF895F50739F2313D4E1F3035226661AB81F8EBE54A75FAB359A6B3C094AA885'
     }
 )
 
