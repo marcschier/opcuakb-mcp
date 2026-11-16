@@ -25,7 +25,7 @@ dotnet build
 dotnet build src/OpcUaKb.Pipeline
 ```
 
-There are no unit tests — `OpcUaKb.Test` is a console app requiring live Azure credentials. CI validates compilation only.
+There are no unit tests. `OpcUaKb.Test` is a console app whose live queries require Azure credentials; CI runs the existing offline selectors (`url`, `sts`, `html`, and `mapping`) without credentials, along with compilation, package verification, and Docker build qualifications.
 
 ## Key Dependencies
 
@@ -36,9 +36,9 @@ There are no unit tests — `OpcUaKb.Test` is a console app requiring live Azure
 | `Azure.Identity` | 1.21.0 | Core, Pipeline, Indexer, Setup, Test |
 | `Azure.Storage.Blobs` | 12.30.1 | Core, Crawler, Indexer, Pipeline, McpServer |
 | `Azure.Storage.Queues` | 12.28.1 | Core, McpServer |
-| `AngleSharp` | 1.8.6 | Crawler, Indexer, Pipeline, Test |
-| `ModelContextProtocol.AspNetCore` | 2.3.0 | McpServer |
-| `ModelContextProtocol` (Core) | 2.3.0 | Core, HostedAgent (direct MCP client) |
+| `AngleSharp` | 1.10.3 | Crawler, Indexer, Pipeline, Test |
+| `ModelContextProtocol.AspNetCore` | 2.4.0 | McpServer |
+| `ModelContextProtocol` (Core) | 2.4.0 | Core, HostedAgent (direct MCP client) |
 | `Microsoft.Agents.AI.Foundry.Hosting` | 1.11.1-preview.260625.1 | HostedAgent (Agent Framework + Responses v1) |
 | `Azure.AI.Projects` | 2.1.0-beta.4 | HostedAgent (project client + AsAIAgent) |
 
